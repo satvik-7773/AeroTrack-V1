@@ -1,6 +1,6 @@
 """
-AeroTrack-X1: Live Tactical Streaming Control Interface
-Author: Certified Python Developer
+AeroTrack-V1
+Author: Satvik
 """
 
 import os
@@ -13,14 +13,14 @@ import pandas as pd
 import numpy as np
 import joblib
 
-# Force absolute imports from parent directory
+
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from data_ingestion.client import OpenSkyClient
 
-# Initialize page parameters
-st.set_page_config(page_title="AeroTrack-X1 Live Control Matrix", layout="wide")
 
-# Inject high-visibility CSS theme
+st.set_page_config(page_title="AeroTrack-V1 Live", layout="wide")
+
+
 st.markdown("""
     <style>
     .main { background-color: #070a12; color: #ffffff; }
@@ -36,14 +36,14 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🛰️ AEROTRACK-X1 // LIVE STREAM MATRIX")
-st.caption("REAL-TIME TACTICAL ANOMALY DETECTOR // ACTIVE ADSB INFERENCE NODE")
+st.title("🛰️ AEROTRACK-V1 // Live Flight Map")
+st.caption("Real Time Flight Anomaly Detector // Active NDSB Interference Node")
 st.write("---")
 
 CORE_DIR = os.path.dirname(os.path.dirname(__file__))
 MODEL_TARGET = os.path.join(CORE_DIR, "ml_models", "skyguard_model.pkl")
 
-# Initialize persistent session states to act as our tracking radar buffer
+# Initialize persistent session states , acts as radar buffer
 if "radar_buffer" not in st.session_state:
     st.session_state.radar_buffer = pd.DataFrame()
 if "client_node" not in st.session_state:
@@ -58,56 +58,56 @@ def process_live_stream(raw_vectors, prior_df):
         return prior_df
         
     if prior_df.empty:
-        # Initial cycle fallback defaults
+        #cycle fallback defaults
         current_df["acceleration"] = 0.0
         current_df["turn_rate"] = 0.0
         return current_df
 
-    # Merge current frame with tracking buffer history
+    
     prior_lookup = prior_df.set_index("icao24")[["timestamp", "velocity", "heading"]]
     current_df = current_df.join(prior_lookup, on="icao24", rsuffix="_prev")
 
-    # Compute live differential kinematics
+    #differential kinematics
     current_df["dt"] = current_df["timestamp"] - current_df["timestamp_prev"]
     
-    # Calculate acceleration vector
+    #acceleration vector
     current_df["dv"] = current_df["velocity"] - current_df["velocity_prev"]
     current_df["acceleration"] = np.where(current_df["dt"] > 0, current_df["dv"] / current_df["dt"], 0.0)
 
-    # Calculate heading angular delta handling circular wrapping bounds
+    #heading angular delta handling circular wrapping bounds
     current_df["d_heading"] = current_df["heading"] - current_df["heading_prev"]
     current_df["d_heading"] = np.where(current_df["d_heading"] > 180, current_df["d_heading"] - 360, current_df["d_heading"])
     current_df["d_heading"] = np.where(current_df["d_heading"] < -180, current_df["d_heading"] + 360, current_df["d_heading"])
     current_df["turn_rate"] = np.where(current_df["dt"] > 0, np.abs(current_df["d_heading"]) / current_df["dt"], 0.0)
 
-    # Standard clean up and fill missing lines
+    
     current_df["acceleration"] = current_df["acceleration"].fillna(0.0)
     current_df["turn_rate"] = current_df["turn_rate"].fillna(0.0)
     
     drop_cols = ["dt", "dv", "d_heading", "timestamp_prev", "velocity_prev", "heading_prev"]
     return current_df.drop(columns=[col for col in drop_cols if col in current_df.columns])
 
-# Master operational control block
+#control block
 if st.session_state.classifier is None:
     st.error("CRITICAL ERROR: AI model brain missing at ml_models/skyguard_model.pkl. Run train_detector.py first.")
 else:
-    # Fetch fresh live payload directly from space
+    
     raw_payload = st.session_state.client_node.poll_airspace_matrix()
     parsed_vectors = st.session_state.client_node.parse_state_vectors(raw_payload)
 
-    # Process and engineer the incoming data stream
+   
     st.session_state.radar_buffer = process_live_stream(parsed_vectors, st.session_state.radar_buffer)
     working_df = st.session_state.radar_buffer.copy()
 
     if not working_df.empty:
-        # Execute real-time machine learning inference
+        
         working_df["vertical_rate"] = working_df["vertical_rate"].fillna(0.0)
         features = ["velocity", "vertical_rate", "acceleration", "turn_rate"]
         
         predictions = st.session_state.classifier.predict(working_df[features].values)
         working_df["threat_status"] = np.where(predictions == -1, "THREAT METRIC VIOLATION", "NOMINAL")
 
-        # 1. Update Top-Level Dashboard Metrics
+       
         total_targets = len(working_df)
         live_threats = len(working_df[working_df["threat_status"] == "THREAT METRIC VIOLATION"])
 
@@ -125,7 +125,7 @@ else:
             st.metric("Stream Refresh Window", "POLLING INTERV. // 30s")
             st.markdown('</div>', unsafe_allow_html=True)
 
-        # 2. Render Live Map Update
+        #map updates
         palette = {"NOMINAL": "#00ffd0", "THREAT METRIC VIOLATION": "#ff2a5f"}
         
         live_map = px.scatter_map(
@@ -142,7 +142,7 @@ else:
         live_map.update_layout(map_style="carto-darkmatter", margin={"r":0,"t":0,"l":0,"b":0})
         st.plotly_chart(live_map, width="stretch")
 
-        # 3. Dynamic Incident Logging Table
+        #dyanmic table
         st.write("### Live Incident Capture Log")
         threat_log = working_df[working_df["threat_status"] == "THREAT METRIC VIOLATION"][
             ["timestamp", "icao24", "callsign", "velocity", "acceleration", "turn_rate"]
@@ -152,6 +152,6 @@ else:
     else:
         st.warning("Awaiting initial telemetry package lock from API network...")
 
-    # Auto-Refresh Pipeline Mechanism: Loop execution every 30 seconds
+    #autorefresh
     time.sleep(30)
     st.rerun()
