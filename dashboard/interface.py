@@ -60,7 +60,7 @@ def fetch_airspace_telemetry():
 # --- APPLICATION HEADER ---
 st.title("🛰️ AeroTrack-V1 // Tactical Airspace Control Grid")
 st.caption("Real-Time Global ADS-B Ingestion Engine • Powered by AirLabs API & Machine Learning")
-st.hr()
+st.divider()
 
 # --- SIDEBAR CONTROLLER MATRIX ---
 st.sidebar.header("🕹️ Tactical Control Panel")
