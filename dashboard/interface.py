@@ -2,6 +2,18 @@
 AeroTrack-V1: Tactical Airspace Monitoring Interface
 Author: Certified Python Developer
 """
+import sys
+import os
+
+# Dynamically append the project root directory to the Python tracking path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Your existing imports continue perfectly below
+import streamlit as st
+import pandas as pd
+import plotly.express as px
+import time
+from data_ingestion.client import OpenSkyClient
 
 import streamlit as st
 import pandas as pd
