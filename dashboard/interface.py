@@ -1,27 +1,21 @@
 """
-AeroTrack-V1: Tactical Airspace Monitoring Interface
+AeroTrack-V1: Full-Width Tactical Airspace Control Center
 Author: Certified Python Developer
 """
+
 import sys
 import os
 
 # Dynamically append the project root directory to the Python tracking path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Your existing imports continue perfectly below
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 import time
 from data_ingestion.client import OpenSkyClient
 
-import streamlit as st
-import pandas as pd
-import plotly.express as px
-import time
-from data_ingestion.client import OpenSkyClient
-
-# Page configuration for tactical dark-mode dashboard aesthetics
+# Page configuration for tactical full-width dark-mode radar grid
 st.set_page_config(
     page_title="AeroTrack-V1 // Airspace Monitor",
     page_icon="🛰️",
@@ -29,123 +23,141 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Force Dark Theme styling injection
+# Custom Dark Combat Information Center CSS styling
 st.markdown("""
     <style>
-    .main { background-color: #0e1117; color: #ffffff; }
+    .main { background-color: #0b0e14; color: #ffffff; }
     div.stButton > button:first-child {
-        background-color: #0066cc; color: white; border-radius: 4px;
+        background-color: #0088cc; color: white; border-radius: 4px;
         font-weight: bold; border: none; height: 3em;
     }
-    div.stButton > button:first-child:hover { background-color: #0052a3; }
+    div.stButton > button:first-child:hover { background-color: #006699; }
+    .stMetric { background-color: #121824; padding: 15px; border-radius: 5px; border-left: 3px solid #00ffff; }
     </style>
     """, unsafe_allow_html=True)
 
 # Initialize the underlying ingestion client node
 client = OpenSkyClient()
 
-# --- STRATEGY 1 & 2: MEMORY CACHE SHIELD ---
-# This function buffers the API payload in server memory for 60 seconds
+# --- DATA MEMORY BUFFER SHIELD ---
 @st.cache_data(ttl=60)
 def fetch_airspace_telemetry():
-    """Queries the AirLabs data pipeline and returns structured data frame mapping."""
+    """Queries the AirLabs data pipeline and structures the incoming vectors."""
     raw_payload = client.poll_airspace_matrix()
     parsed_vectors = client.parse_state_vectors(raw_payload)
     
     if not parsed_vectors:
         return pd.DataFrame()
         
-    return pd.DataFrame(parsed_vectors)
+    df_temp = pd.DataFrame(parsed_vectors)
+    
+    # Clean up callsign strings to ensure full format (e.g., "AI111")
+    if "callsign" in df_temp.columns:
+        df_temp["callsign"] = df_temp["callsign"].str.upper().str.strip()
+        
+    # --- TACTICAL THREAT DISCRIMINATION LOGIC ---
+    # Assigning Cyan for baseline tracks, Red for targets matching alert criteria
+    df_temp["Classification"] = "Standard Track"
+    df_temp["Tactical_Color"] = "#00ffff"  # Default Cyan
+    
+    # Quick alert threshold: flag targets with extreme speeds or vertical rates as anomalies
+    if not df_temp.empty:
+        threat_mask = (df_temp["velocity"] > 950) | (df_temp["vertical_rate"].abs() > 3000)
+        df_temp.loc[threat_mask, "Classification"] = "Threat Alert"
+        df_temp.loc[threat_mask, "Tactical_Color"] = "#ff0033"  # High-Visibility Red
+        
+    return df_temp
 
 # --- APPLICATION HEADER ---
 st.title("🛰️ AeroTrack-V1 // Tactical Airspace Control Grid")
-st.caption("Real-Time Global ADS-B Ingestion Engine • Powered by AirLabs API & Machine Learning")
+st.caption("Real-Time Global ADS-B Ingestion Engine • Threat Discrimination Node Active")
 st.divider()
 
-# --- SIDEBAR CONTROLLER MATRIX ---
+# --- SIDEBAR CONTROLLER ---
 st.sidebar.header("🕹️ Tactical Control Panel")
-st.sidebar.markdown("Use the primary sweep mechanism to ping active transponders over global airspace corridors.")
+st.sidebar.markdown("Execute active corridor sweeps to refresh tracking coordinates across global maps.")
+st.sidebar.info("💡 **Quota Protection:** Radar scans are throttled to 1 request per 60 seconds to safeguard your free monthly tier.")
 
-# Quota tracking helper inside sidebar
-st.sidebar.info("💡 **Quota Optimization Active:** Radar sweeps are throttled to 1 request per 60 seconds to protect your free 1,000 monthly tier limit.")
+# --- SCAN TRIGGER CONTROLLER ---
+if st.button("📡 EXECUTE ACTIVE RADAR CORRIDOR SWEEP", use_container_width=True):
+    st.cache_data.clear()
+    st.toast("Transponder sweep dispatched!", icon="🚀")
 
-# --- ON-DEMAND RADAR SWEEP TRIGGER ---
-col1, col2 = st.columns([3, 1])
-
-with col1:
-    # Clicking this button clears the local 60-second cache to allow a fresh API call
-    if st.button("📡 EXECUTE ACTIVE RADAR CORRIDOR SWEEP", use_container_width=True):
-        st.cache_data.clear()
-        st.toast("Transponder ping dispatched to AirLabs matrix!", icon="🚀")
-
-with col2:
-    # Explicit timestamp tracker so you know exactly when the current map data was pulled
-    if 'last_sweep' not in st.session_state:
-        st.session_state.last_sweep = time.strftime("%H:%M:%S")
-        
-    if st.button("🔄 Force UI Redraw", use_container_width=True):
-        st.session_state.last_sweep = time.strftime("%H:%M:%S")
-
-# Fetch data (Will pull instantly from local cache memory unless the Sweep button clears it)
-with st.spinner("Processing tactical sensor arrays..."):
+# Ingest and process telemetry matrix
+with st.spinner("Synchronizing tactical sensor arrays..."):
     df = fetch_airspace_telemetry()
 
-# --- GRAPHICS RENDERING MATRIX ---
+# --- GRAPHICS RENDERING LAYER ---
 if df.empty:
     st.warning("⚠️ Airspace Grid Cold: No active tracking streams detected. Execute an Active Radar Corridor Sweep above.")
 else:
-    # Metric Snapshot Layout
-    total_aircraft = len(df)
-    avg_velocity = df['velocity'].mean()
-    max_altitude = df['baro_altitude'].max()
-
+    # Top-Level Fleet Metrics
+    total_targets = len(df)
+    threat_count = len(df[df["Classification"] == "Threat Alert"])
+    
     m1, m2, m3 = st.columns(3)
-    m1.metric(label="Active Radar Targets", value=f"{total_aircraft} Airborne")
-    m2.metric(label="Mean Ground Speed", value=f"{avg_velocity:.1f} km/h")
-    m3.metric(label="Ceiling Peak", value=f"{max_altitude:,.0f} ft")
+    m1.metric(label="Total Logged Airspace Tracks", value=f"{total_targets} Targets")
+    m2.metric(label="Identified Threats / Alerts", value=f"{threat_count} Active")
+    m3.metric(label="Sensor System Array Status", value="NOMINAL / LIVE")
+    st.write("")
 
-    # Layout Partition: Left Map, Right Data Grid
-    graph_col, table_col = st.columns([2, 1])
-
-    with graph_col:
-        st.subheader("🌐 Real-Time Spatial Vector Tracking Map")
-        
-        # Build Mapbox plot engine
-        fig = px.scatter_mapbox(
-            df,
-            lat="latitude",
-            lon="longitude",
-            hover_name="callsign",
-            hover_data=["icao24", "origin_country", "baro_altitude", "velocity"],
-            color="velocity",
-            color_continuous_scale=px.colors.sequential.Plasma,
-            size_max=15,
-            zoom=1.5,
-            height=600
+    # SECTION 1: Full-Width Tactical Tracking Map
+    st.subheader("🌐 Real-Time Spatial Vector Tracking Map")
+    
+    fig = px.scatter_mapbox(
+        df,
+        lat="latitude",
+        lon="longitude",
+        hover_name="callsign",
+        hover_data={
+            "icao24": True, 
+            "origin_country": True, 
+            "baro_altitude": True, 
+            "velocity": True,
+            "Classification": True,
+            "Tactical_Color": False # Hide color hex codes from tooltip
+        },
+        color="Classification",
+        color_discrete_map={"Standard Track": "#00ffff", "Threat Alert": "#ff0033"}, # Forces Cyan and Red dots
+        size_max=12,
+        zoom=1.8,
+        height=650
+    )
+    
+    fig.update_layout(
+        mapbox_style="carto-darkmatter",
+        margin={"r":0,"t":0,"l":0,"b":0},
+        paper_bgcolor="#0b0e14",
+        plot_bgcolor="#0b0e14",
+        font_color="#ffffff",
+        legend=dict(
+            yanchor="top",
+            y=0.98,
+            xanchor="left",
+            x=0.01,
+            bgcolor="rgba(11, 14, 20, 0.8)",
+            font=dict(color="#ffffff")
         )
-        
-        fig.update_layout(
-            mapbox_style="carto-darkmatter",
-            margin={"r":0,"t":0,"l":0,"b":0},
-            paper_bgcolor="#0e1117",
-            plot_bgcolor="#0e1117",
-            font_color="#ffffff"
-        )
-        
-        st.plotly_chart(fig, use_container_width=True)
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+    st.divider()
 
-    with table_col:
-        st.subheader("📋 Airborne Target Matrix Log")
-        
-        # Cleaned-up display frame for the raw log viewer
-        display_df = df[["callsign", "origin_country", "baro_altitude", "velocity", "heading"]].copy()
-        display_df.columns = ["Callsign", "Flag", "Altitude (ft)", "Speed (km/h)", "Heading"]
-        
-        st.dataframe(
-            display_df,
-            height=560,
-            use_container_width=True,
-            hide_index=True
-        )
+    # SECTION 2: Full-Width Airborne Logs (Threats & Active Airspace Data)
+    st.subheader("📋 Active Airspace Log & Threat Log Matrix")
+    
+    # Filter the view down to actionable flight vectors
+    log_df = df[["Classification", "callsign", "origin_country", "baro_altitude", "velocity", "heading", "icao24"]].copy()
+    log_df.columns = ["Status", "Full Callsign", "Country of Origin", "Altitude (ft)", "Ground Speed (km/h)", "Heading Angle", "ICAO24 Transponder"]
+    
+    # Sort so that any active Red "Threat Alerts" bubble straight to the top of the logging array
+    log_df = log_df.sort_values(by="Status", ascending=False)
+    
+    st.dataframe(
+        log_df,
+        height=400,
+        use_container_width=True,
+        hide_index=True
+    )
 
-st.markdown(f"--- *Grid Data Frame Static Memory Address State • Last Valid Fetch Sequence Verified*")
+st.markdown("--- *Static Memory State Verified • Running Clean Architecture Framework*")
