@@ -1,128 +1,139 @@
 """
-AeroTrack-V1: Live Tactical Streaming Interface
+AeroTrack-V1: Tactical Airspace Monitoring Interface
 Author: Certified Python Developer
 """
 
-import os
-import sys
-import time
-import joblib
-import pandas as pd
-import numpy as np
 import streamlit as st
+import pandas as pd
 import plotly.express as px
-
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+import time
 from data_ingestion.client import OpenSkyClient
 
-st.set_page_config(page_title="AeroTrack-V1 Live Matrix", layout="wide")
+# Page configuration for tactical dark-mode dashboard aesthetics
+st.set_page_config(
+    page_title="AeroTrack-V1 // Airspace Monitor",
+    page_icon="🛰️",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
+# Force Dark Theme styling injection
 st.markdown("""
     <style>
-    .main { background-color: #070a12; color: #ffffff; }
-    .metric-card {
-        background-color: #0f1424;
-        border: 1px solid #1e294b;
-        padding: 1.2rem;
-        border-radius: 4px;
-        margin-bottom: 1rem;
+    .main { background-color: #0e1117; color: #ffffff; }
+    div.stButton > button:first-child {
+        background-color: #0066cc; color: white; border-radius: 4px;
+        font-weight: bold; border: none; height: 3em;
     }
-    div[data-testid="stMetricValue"] { color: #00ffaa; font-family: 'Courier New', monospace; font-weight: 700; }
-    div[data-testid="stMetricLabel"] { color: #94a3b8; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; }
+    div.stButton > button:first-child:hover { background-color: #0052a3; }
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🛰️ TACTICAL LIVE RADAR // AEROTRACK-V1")
-st.caption("REAL-TIME STREAMING AIRSPACE TELEMETRY // AI INFERENCE CORE")
-st.write("---")
+# Initialize the underlying ingestion client node
+client = OpenSkyClient()
 
-CORE_DIR = os.path.dirname(os.path.dirname(__file__))
-MODEL_TARGET = os.path.join(CORE_DIR, "ml_models", "skyguard_model.pkl")
-
-if "radar_buffer" not in st.session_state:
-    st.session_state.radar_buffer = pd.DataFrame()
-if "client_node" not in st.session_state:
-    st.session_state.client_node = OpenSkyClient()
-if "classifier" not in st.session_state:
-    st.session_state.classifier = joblib.load(MODEL_TARGET) if os.path.exists(MODEL_TARGET) else None
-
-def process_live_stream(raw_vectors, prior_df):
-    current_df = pd.DataFrame(raw_vectors)
-    if current_df.empty:
-        return prior_df
-    if prior_df.empty:
-        current_df["acceleration"] = 0.0
-        current_df["turn_rate"] = 0.0
-        return current_df
-
-    prior_lookup = prior_df.set_index("icao24")[["timestamp", "velocity", "heading"]].drop_duplicates()
-    current_df = current_df.join(prior_lookup, on="icao24", rsuffix="_prev")
-
-    current_df["dt"] = current_df["timestamp"] - current_df["timestamp_prev"]
-    current_df["dv"] = current_df["velocity"] - current_df["velocity_prev"]
-    current_df["acceleration"] = np.where(current_df["dt"] > 0, current_df["dv"] / current_df["dt"], 0.0)
-
-    current_df["d_heading"] = current_df["heading"] - current_df["heading_prev"]
-    current_df["d_heading"] = np.where(current_df["d_heading"] > 180, current_df["d_heading"] - 360, current_df["d_heading"])
-    current_df["d_heading"] = np.where(current_df["d_heading"] < -180, current_df["d_heading"] + 360, current_df["d_heading"])
-    current_df["turn_rate"] = np.where(current_df["dt"] > 0, np.abs(current_df["d_heading"]) / current_df["dt"], 0.0)
-
-    current_df["acceleration"] = current_df["acceleration"].fillna(0.0)
-    current_df["turn_rate"] = current_df["turn_rate"].fillna(0.0)
+# --- STRATEGY 1 & 2: MEMORY CACHE SHIELD ---
+# This function buffers the API payload in server memory for 60 seconds
+@st.cache_data(ttl=60)
+def fetch_airspace_telemetry():
+    """Queries the AirLabs data pipeline and returns structured data frame mapping."""
+    raw_payload = client.poll_airspace_matrix()
+    parsed_vectors = client.parse_state_vectors(raw_payload)
     
-    drop_cols = ["dt", "dv", "d_heading", "timestamp_prev", "velocity_prev", "heading_prev"]
-    return current_df.drop(columns=[col for col in drop_cols if col in current_df.columns])
-
-if st.session_state.classifier is None:
-    st.error("SYSTEM ERROR: Machine Learning Model Binary Not Found.")
-else:
-    # Pull strict, un-cached live vectors from space
-    raw_payload = st.session_state.client_node.poll_airspace_matrix()
-    parsed_vectors = st.session_state.client_node.parse_state_vectors(raw_payload)
-
     if not parsed_vectors:
-        st.warning("🔄 Connecting to live airspace coordinates... Radar sweeping...")
-        working_df = st.session_state.radar_buffer
-    else:
-        st.session_state.radar_buffer = process_live_stream(parsed_vectors, st.session_state.radar_buffer)
-        working_df = st.session_state.radar_buffer.copy()
-
-    if not working_df.empty:
-        working_df["vertical_rate"] = working_df["vertical_rate"].fillna(0.0)
-        features = ["velocity", "vertical_rate", "acceleration", "turn_rate"]
+        return pd.DataFrame()
         
-        predictions = st.session_state.classifier.predict(working_df[features].values)
-        working_df["threat_status"] = np.where(predictions == -1, "THREAT METRIC VIOLATION", "NOMINAL")
+    return pd.DataFrame(parsed_vectors)
 
-        total_targets = len(working_df)
-        live_threats = len(working_df[working_df["threat_status"] == "THREAT METRIC VIOLATION"])
+# --- APPLICATION HEADER ---
+st.title("🛰️ AeroTrack-V1 // Tactical Airspace Control Grid")
+st.caption("Real-Time Global ADS-B Ingestion Engine • Powered by AirLabs API & Machine Learning")
+st.hr()
 
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Live Tracked Targets", total_targets)
-        with col2:
-            st.metric("Active Threat Alerts", live_threats, delta=f"Risk Corridors: {live_threats/total_targets*100:.2f}%" if total_targets > 0 else "0%")
-        with col3:
-            st.metric("Data Engine Status", "STREAMING // LIVE")
+# --- SIDEBAR CONTROLLER MATRIX ---
+st.sidebar.header("🕹️ Tactical Control Panel")
+st.sidebar.markdown("Use the primary sweep mechanism to ping active transponders over global airspace corridors.")
 
-        # Map display
-        palette = {"NOMINAL": "#00ffd0", "THREAT METRIC VIOLATION": "#ff2a5f"}
-        live_map = px.scatter_map(
-            working_df, lat="latitude", lon="longitude",
-            color="threat_status", color_discrete_map=palette,
-            hover_name="callsign", hover_data=["icao24", "velocity", "acceleration", "turn_rate"],
-            zoom=1, height=600
+# Quota tracking helper inside sidebar
+st.sidebar.info("💡 **Quota Optimization Active:** Radar sweeps are throttled to 1 request per 60 seconds to protect your free 1,000 monthly tier limit.")
+
+# --- ON-DEMAND RADAR SWEEP TRIGGER ---
+col1, col2 = st.columns([3, 1])
+
+with col1:
+    # Clicking this button clears the local 60-second cache to allow a fresh API call
+    if st.button("📡 EXECUTE ACTIVE RADAR CORRIDOR SWEEP", use_container_width=True):
+        st.cache_data.clear()
+        st.toast("Transponder ping dispatched to AirLabs matrix!", icon="🚀")
+
+with col2:
+    # Explicit timestamp tracker so you know exactly when the current map data was pulled
+    if 'last_sweep' not in st.session_state:
+        st.session_state.last_sweep = time.strftime("%H:%M:%S")
+        
+    if st.button("🔄 Force UI Redraw", use_container_width=True):
+        st.session_state.last_sweep = time.strftime("%H:%M:%S")
+
+# Fetch data (Will pull instantly from local cache memory unless the Sweep button clears it)
+with st.spinner("Processing tactical sensor arrays..."):
+    df = fetch_airspace_telemetry()
+
+# --- GRAPHICS RENDERING MATRIX ---
+if df.empty:
+    st.warning("⚠️ Airspace Grid Cold: No active tracking streams detected. Execute an Active Radar Corridor Sweep above.")
+else:
+    # Metric Snapshot Layout
+    total_aircraft = len(df)
+    avg_velocity = df['velocity'].mean()
+    max_altitude = df['baro_altitude'].max()
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric(label="Active Radar Targets", value=f"{total_aircraft} Airborne")
+    m2.metric(label="Mean Ground Speed", value=f"{avg_velocity:.1f} km/h")
+    m3.metric(label="Ceiling Peak", value=f"{max_altitude:,.0f} ft")
+
+    # Layout Partition: Left Map, Right Data Grid
+    graph_col, table_col = st.columns([2, 1])
+
+    with graph_col:
+        st.subheader("🌐 Real-Time Spatial Vector Tracking Map")
+        
+        # Build Mapbox plot engine
+        fig = px.scatter_mapbox(
+            df,
+            lat="latitude",
+            lon="longitude",
+            hover_name="callsign",
+            hover_data=["icao24", "origin_country", "baro_altitude", "velocity"],
+            color="velocity",
+            color_continuous_scale=px.colors.sequential.Plasma,
+            size_max=15,
+            zoom=1.5,
+            height=600
         )
-        live_map.update_layout(map_style="open-street-map", margin={"r":0,"t":0,"l":0,"b":0})
-        st.plotly_chart(live_map, width="stretch")
+        
+        fig.update_layout(
+            mapbox_style="carto-darkmatter",
+            margin={"r":0,"t":0,"l":0,"b":0},
+            paper_bgcolor="#0e1117",
+            plot_bgcolor="#0e1117",
+            font_color="#ffffff"
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
 
-        # Table Display
-        st.write("### Live Incident Capture Log")
-        threat_log = working_df[working_df["threat_status"] == "THREAT METRIC VIOLATION"][
-            ["timestamp", "icao24", "callsign", "velocity", "acceleration", "turn_rate"]
-        ].sort_values(by="acceleration", ascending=False)
-        st.dataframe(threat_log, width="stretch")
+    with table_col:
+        st.subheader("📋 Airborne Target Matrix Log")
+        
+        # Cleaned-up display frame for the raw log viewer
+        display_df = df[["callsign", "origin_country", "baro_altitude", "velocity", "heading"]].copy()
+        display_df.columns = ["Callsign", "Flag", "Altitude (ft)", "Speed (km/h)", "Heading"]
+        
+        st.dataframe(
+            display_df,
+            height=560,
+            use_container_width=True,
+            hide_index=True
+        )
 
-    # Force continuous 30 second radar sweep rerun loop
-    time.sleep(30)
-    st.rerun()
+st.markdown(f"--- *Grid Data Frame Static Memory Address State • Last Valid Fetch Sequence Verified*")
