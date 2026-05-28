@@ -64,7 +64,7 @@ def fetch_airspace_telemetry():
     if not df_temp.empty:
         threat_mask = (df_temp["velocity"] > 950) | (df_temp["vertical_rate"].abs() > 3000)
         df_temp.loc[threat_mask, "Classification"] = "Threat Alert"
-        df_temp.loc[threat_mask, "Tactical_Color"] = "#ff0033"  # High-Visibility Red
+        df_temp.loc[threat_mask, "Tactical_Color"] = "#ff0000"  # High-Visibility Red
         
     return df_temp
 
