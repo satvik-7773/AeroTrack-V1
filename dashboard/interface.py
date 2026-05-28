@@ -69,40 +69,40 @@ def fetch_airspace_telemetry():
     return df_temp
 
 # --- APPLICATION HEADER ---
-st.title("🛰️ AeroTrack-V1 // Tactical Airspace Control Grid")
-st.caption("Real-Time Global ADS-B Ingestion Engine • Threat Discrimination Node Active")
+st.title("🛰️ AeroTrack-V1 // Map Aircraft Anomalies in the Airspace")
+st.caption("Real-Time Global Anomaly Detection • Threat Discrimination")
 st.divider()
 
 # --- SIDEBAR CONTROLLER ---
-st.sidebar.header("🕹️ Tactical Control Panel")
-st.sidebar.markdown("Execute active corridor sweeps to refresh tracking coordinates across global maps.")
-st.sidebar.info("💡 **Quota Protection:** Radar scans are throttled to 1 request per 60 seconds to safeguard your free monthly tier.")
+st.sidebar.header("Global Airspace Map")
+st.sidebar.markdown("Execute the 'Refresh The Aircraft Coordinates' command to perform a radar sweep")
+st.sidebar.info("💡Map Refresh Requests are Capped to 1Req per minute for Efficiency of the Tool !")
 
 # --- SCAN TRIGGER CONTROLLER ---
-if st.button("📡 EXECUTE ACTIVE RADAR CORRIDOR SWEEP", use_container_width=True):
+if st.button("📡 Refresh The Aircraft Coordinates", use_container_width=True):
     st.cache_data.clear()
-    st.toast("Transponder sweep dispatched!", icon="🚀")
+    st.toast("Radar sweep dispatched!", icon="🚀")
 
 # Ingest and process telemetry matrix
-with st.spinner("Synchronizing tactical sensor arrays..."):
+with st.spinner("Synchronizing global aircraft positions...."):
     df = fetch_airspace_telemetry()
 
 # --- GRAPHICS RENDERING LAYER ---
 if df.empty:
-    st.warning("⚠️ Airspace Grid Cold: No active tracking streams detected. Execute an Active Radar Corridor Sweep above.")
+    st.warning("⚠️ Warning: No active tracking streams detected. Retry...")
 else:
     # Top-Level Fleet Metrics
     total_targets = len(df)
-    threat_count = len(df[df["Classification"] == "Threat Alert"])
+    threat_count = len(df[df["Classification"] == "Possible Threat Alert"])
     
     m1, m2, m3 = st.columns(3)
     m1.metric(label="Total Logged Airspace Tracks", value=f"{total_targets} Targets")
-    m2.metric(label="Identified Threats / Alerts", value=f"{threat_count} Active")
-    m3.metric(label="Sensor System Array Status", value="NOMINAL / LIVE")
+    m2.metric(label="Identified Anomalies / Alerts", value=f"{threat_count} Active")
+    m3.metric(label="Sensor System Array Status", value="LIVE")
     st.write("")
 
     # SECTION 1: Full-Width Tactical Tracking Map
-    st.subheader("🌐 Real-Time Spatial Vector Tracking Map")
+    st.subheader("🌐 Real-Time Global Airspace Mapping")
     
     fig = px.scatter_mapbox(
         df,
@@ -118,7 +118,7 @@ else:
             "Tactical_Color": False # Hide color hex codes from tooltip
         },
         color="Classification",
-        color_discrete_map={"Standard Track": "#00ffff", "Threat Alert": "#ff0033"}, # Forces Cyan and Red dots
+        color_discrete_map={"Standard Track": "#00ffff", "Possible Threat Alert": "#ff0033"}, # Forces Cyan and Red dots
         size_max=12,
         zoom=1.8,
         height=650
@@ -144,7 +144,7 @@ else:
     st.divider()
 
     # SECTION 2: Full-Width Airborne Logs (Threats & Active Airspace Data)
-    st.subheader("📋 Active Airspace Log & Threat Log Matrix")
+    st.subheader("📋 Active Airspace Log & Anomaly Log Status")
     
     # Filter the view down to actionable flight vectors
     log_df = df[["Classification", "callsign", "origin_country", "baro_altitude", "velocity", "heading", "icao24"]].copy()
@@ -160,4 +160,4 @@ else:
         hide_index=True
     )
 
-st.markdown("--- *Static Memory State Verified • Running Clean Architecture Framework*")
+st.markdown("--- *Static Memory // State Verified Data • Designed & Built by - Satvik (satvik-7773)")
