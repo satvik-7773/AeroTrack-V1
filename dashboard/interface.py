@@ -1,7 +1,4 @@
-"""
-AeroTrack-V1: Full-Width Tactical Airspace Control Center
-Author: Certified Python Developer
-"""
+
 
 import sys
 import os
@@ -62,9 +59,9 @@ def fetch_airspace_telemetry():
     
     # Quick alert threshold: flag targets with extreme speeds or vertical rates as anomalies
     if not df_temp.empty:
-        threat_mask = (df_temp["velocity"] > 950) | (df_temp["vertical_rate"].abs() > 3000)
+        threat_mask = (df_temp["velocity"] > 500) | (df_temp["vertical_rate"].abs() > 3000)
         df_temp.loc[threat_mask, "Classification"] = "Threat Alert"
-        df_temp.loc[threat_mask, "Tactical_Color"] = "#ff0000"  # High-Visibility Red
+        df_temp.loc[threat_mask, "Tactical_Color"] = "#ff0033"  # High-Visibility Red
         
     return df_temp
 
