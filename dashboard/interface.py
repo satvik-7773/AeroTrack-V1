@@ -165,7 +165,7 @@ else:
     st.divider()
 
     # SECTION 2: Full-Width Airborne Logs (Threats & Active Airspace Data)
-    st.subheader("📋 Active Airspace Log & Anomaly Log Status")
+    st.subheader("📋 Active Airspace Log & Anomaly Log")
     
     # Filter the view down to actionable flight vectors
     log_df = df[["Classification", "callsign", "origin_country", "baro_altitude", "velocity", "heading", "icao24"]].copy()
