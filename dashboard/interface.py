@@ -52,10 +52,11 @@ def fetch_airspace_telemetry():
     if "callsign" in df_temp.columns:
         df_temp["callsign"] = df_temp["callsign"].str.upper().str.strip()
         
-    # --- KINEMATIC ANOMALY & PHYSICS ENFORCEMENT ENGINE ---
-    df_temp["Classification"] = "Standard Track"
-    
+   # --- KINEMATIC ANOMALY & PHYSICS ENFORCEMENT ENGINE ---
     if not df_temp.empty:
+        # Pre-populate ALL rows with "Standard Track" to prevent NaN values
+        df_temp["Classification"] = "Standard Track"
+        
         for idx, row in df_temp.iterrows():
             try:
                 velocity = float(row.get("velocity", 0.0))
@@ -81,7 +82,11 @@ def fetch_airspace_telemetry():
                     df_temp.at[idx, "Classification"] = "Threat Alert"
                     
             except Exception:
-                continue  
+                # Fallback to protect dataframe structure integrity on bad rows
+                df_temp.at[idx, "Classification"] = "Standard Track"
+    else:
+        # Guarantee empty dataframe still has structural column names for the UI elements
+        df_temp = pd.DataFrame(columns=["Classification", "callsign", "origin_country", "baro_altitude", "velocity", "heading", "icao24", "latitude", "longitude"])
         
     return df_temp
 
@@ -131,11 +136,10 @@ else:
             "origin_country": True, 
             "baro_altitude": True, 
             "velocity": True,
-            "Classification": True,
-            "Tactical_Color": False # Hide color hex codes from tooltip
+            "Classification": True
         },
         color="Classification",
-        color_discrete_map={"Standard Track": "#00ffff", "Possible Threat Alert": "#ff0033"}, # Forces Cyan and Red dots
+        color_discrete_map={"Standard Track": "#00ffff", "Threat Alert": "#ff0033"}, 
         size_max=12,
         zoom=1.8,
         height=650
