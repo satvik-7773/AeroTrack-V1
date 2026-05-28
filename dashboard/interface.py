@@ -61,7 +61,7 @@ def fetch_airspace_telemetry():
     if not df_temp.empty:
         threat_mask = (df_temp["velocity"] > 500) | (df_temp["vertical_rate"].abs() > 3000)
         df_temp.loc[threat_mask, "Classification"] = "Threat Alert"
-        df_temp.loc[threat_mask, "Tactical_Color"] = "#ff0033"  # High-Visibility Red
+        df_temp.loc[threat_mask, "Tactical_Color"] = "#7C0D0E"  
         
     return df_temp
 
@@ -90,7 +90,7 @@ if df.empty:
 else:
     # Top-Level Fleet Metrics
     total_targets = len(df)
-    threat_count = len(df[df["Classification"] == "Possible Threat Alert"])
+    threat_count = len(df[df["Classification"] == "Threat Alert"])
     
     m1, m2, m3 = st.columns(3)
     m1.metric(label="Total Logged Airspace Tracks", value=f"{total_targets} Targets")
