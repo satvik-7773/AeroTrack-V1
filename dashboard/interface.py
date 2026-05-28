@@ -52,16 +52,36 @@ def fetch_airspace_telemetry():
     if "callsign" in df_temp.columns:
         df_temp["callsign"] = df_temp["callsign"].str.upper().str.strip()
         
-    # --- TACTICAL THREAT DISCRIMINATION LOGIC ---
-    # Assigning Cyan for baseline tracks, Red for targets matching alert criteria
+    # --- KINEMATIC ANOMALY & PHYSICS ENFORCEMENT ENGINE ---
     df_temp["Classification"] = "Standard Track"
-    df_temp["Tactical_Color"] = "#00ffff"  # Default Cyan
     
-    # Quick alert threshold: flag targets with extreme speeds or vertical rates as anomalies
     if not df_temp.empty:
-        threat_mask = (df_temp["velocity"] > 500) | (df_temp["vertical_rate"].abs() > 3000)
-        df_temp.loc[threat_mask, "Classification"] = "Threat Alert"
-        df_temp.loc[threat_mask, "Tactical_Color"] = "#7C0D0E"  
+        for idx, row in df_temp.iterrows():
+            try:
+                velocity = float(row.get("velocity", 0.0))
+                vert_rate = abs(float(row.get("vertical_rate", 0.0)))
+                altitude = float(row.get("baro_altitude", 0.0))
+                heading = float(row.get("heading", 0.0))
+                callsign = str(row.get("callsign", "")).upper().strip()
+                
+                # Rule 1: Low-Altitude High-Dynamic Pressure Violation (Low Alt, High Speed)
+                is_low_alt_speed_violation = (altitude < 20000 and velocity > 880)
+                
+                # Rule 2: Absolute Aerodynamic Ceiling Breach
+                is_ceiling_breach = (altitude > 43500)
+                
+                # Rule 3: High-Performance Maneuver Profile
+                is_extreme_maneuver = (vert_rate > 4500)
+                
+                # Rule 4: Critical Dynamic Dash Profile
+                is_supersonic_dash = (velocity > 1050)
+                
+                # --- SPOOFING PATTERN DETECTION ---
+                if is_low_alt_speed_violation or is_ceiling_breach or is_extreme_maneuver or is_supersonic_dash:
+                    df_temp.at[idx, "Classification"] = "Threat Alert"
+                    
+            except Exception:
+                continue  
         
     return df_temp
 
