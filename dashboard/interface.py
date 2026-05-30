@@ -53,36 +53,46 @@ def fetch_airspace_telemetry():
         df_temp["callsign"] = df_temp["callsign"].str.upper().str.strip()
         
    # --- KINEMATIC ANOMALY & PHYSICS ENFORCEMENT ENGINE ---
+    # --- DYNAMIC RELATIONAL ENVELOPE & TRUE ANOMALY ENGINE ---
     if not df_temp.empty:
-        # Pre-populate ALL rows with "Standard Track" to prevent NaN values
         df_temp["Classification"] = "Standard Track"
+        
+        # High-altitude business jets that routinely fly above commercial ceilings
+        biz_jets = ["GLEX", "GLF4", "GLF5", "GLF6", "CL30", "CL60", "F900", "FA7X", "C750"]
         
         for idx, row in df_temp.iterrows():
             try:
                 velocity = float(row.get("velocity", 0.0))
-                vert_rate = abs(float(row.get("vertical_rate", 0.0)))
                 altitude = float(row.get("baro_altitude", 0.0))
-                heading = float(row.get("heading", 0.0))
-                callsign = str(row.get("callsign", "")).upper().strip()
+                vert_rate = abs(float(row.get("vertical_rate", 0.0)))
+                aircraft_type = str(row.get("aircraft_type", "UNKN")).upper().strip()
+                icao24 = str(row.get("icao24", "UNKN")).upper().strip()
                 
-                # Rule 1: Low-Altitude High-Dynamic Pressure Violation (Low Alt, High Speed)
-                is_low_alt_speed_violation = (altitude < 20000 and velocity > 880)
+                # --- RULE 1: THE DRAG-LIMIT VIOLATION (Spoofed Aerodynamics) ---
+                # It is physically impossible for a civil airliner to do 850+ km/h below 15,000 ft. 
+                # This indicates a tactical asset or a spoofed transponder hiding down low.
+                is_low_alt_dash = (altitude < 15000 and velocity > 850)
                 
-                # Rule 2: Absolute Aerodynamic Ceiling Breach
-                is_ceiling_breach = (altitude > 43500)
+                # --- RULE 2: AIRFRAME-SPECIFIC CEILING BREACH ---
+                # Dynamically set the ceiling based on the aircraft type to stop false alarms on private jets
+                max_ceiling = 51000 if aircraft_type in biz_jets else 43500
+                is_ceiling_breach = (altitude > max_ceiling)
                 
-                # Rule 3: High-Performance Maneuver Profile
-                is_extreme_maneuver = (vert_rate > 4500)
+                # --- RULE 3: TAILWIND PROTECTED DASH LIMIT ---
+                # A plane at 40k ft can easily hit 1150 km/h with a jetstream (Standard).
+                # We only flag if it exceeds 1200 km/h, OR if it hits Mach 1 at medium altitudes.
+                is_true_dash = (velocity > 1250) or (velocity > 1050 and altitude < 28000)
                 
-                # Rule 4: Critical Dynamic Dash Profile
-                is_supersonic_dash = (velocity > 1050)
+                # --- RULE 4: HARDWARE METADATA TAMPERING ---
+                # A valid ICAO24 code is exactly 6 hex characters. Spoofed SDRs often transmit 
+                # corrupted hexes or default strings while still projecting a civil callsign.
+                is_malformed_hex = (icao24 != "UNKN" and len(icao24) != 6)
                 
-                # --- SPOOFING PATTERN DETECTION ---
-                if is_low_alt_speed_violation or is_ceiling_breach or is_extreme_maneuver or is_supersonic_dash:
+                # --- EVALUATION ---
+                if is_low_alt_dash or is_ceiling_breach or is_true_dash or is_malformed_hex:
                     df_temp.at[idx, "Classification"] = "Threat Alert"
                     
             except Exception:
-                # Fallback to protect dataframe structure integrity on bad rows
                 df_temp.at[idx, "Classification"] = "Standard Track"
     else:
         # Guarantee empty dataframe has ALL structural column names, including new intelligence metrics
