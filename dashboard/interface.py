@@ -132,11 +132,15 @@ else:
         lon="longitude",
         hover_name="callsign",
         hover_data={
-            "icao24": True, 
+            "icao24": True,
+            "aircraft_type": True,
+            "flight_number": True,
+            "departure_iata": True,
             "origin_country": True, 
             "baro_altitude": True, 
             "velocity": True,
             "Classification": True
+            
         },
         color="Classification",
         color_discrete_map={"Standard Track": "#00ffff", "Threat Alert": "#ff0033"}, 
@@ -162,23 +166,48 @@ else:
     )
     
     st.plotly_chart(fig, use_container_width=True)
+# --- AIRBORNE LOG MATRIX (TABLE UI) ---
     st.divider()
+    st.subheader("Active Airspace Intelligence Log")
+    
+    # 1. Select only the most relevant columns for the tactical display
+    # (We drop raw lat/lon to save screen space, keeping pure intelligence)
+    display_columns = [
+        "Classification", 
+        "flight_number",
+        "airline_code",
+        "aircraft_type",
+        "departure_iata",
+        "baro_altitude", 
+        "velocity", 
+        "heading", 
+        "icao24"
+    ]
+    
+    # Check if the columns exist (safeguard for cold starts)
+    available_cols = [col for col in display_columns if col in df.columns]
+    df_display = df[available_cols].copy()
+    
+    # 2. Rename the backend keys into professional UI headers
+    df_display = df_display.rename(columns={
+        "Classification": "Threat Status",
+        "flight_number": "Flight No.",
+        "airline_code": "Operator ID",
+        "aircraft_type": "Airframe",
+        "departure_iata": "Origin (IATA)",
+        "baro_altitude": "Altitude (ft)",
+        "velocity": "Ground Speed (km/h)",
+        "heading": "Track (°)",
+        "icao24": "Transponder Hex"
+    })
+    
+    # 3. Sort the matrix to bubble Threat Alerts to the absolute top
+    if "Threat Status" in df_display.columns:
+        # Create a custom sorting index (Threats get a 0, Standards get a 1)
+        df_display["_sort_rank"] = df_display["Threat Status"].apply(lambda x: 0 if x == "Threat Alert" else 1)
+        df_display = df_display.sort_values(by=["_sort_rank", "Altitude (ft)"], ascending=[True, False])
+        df_display = df_display.drop(columns=["_sort_rank"]) # Hide the sorting logic from the UI
 
-    # SECTION 2: Full-Width Airborne Logs (Threats & Active Airspace Data)
-    st.subheader("📋 Active Airspace Log & Anomaly Log")
-    
-    # Filter the view down to actionable flight vectors
-    log_df = df[["Classification", "callsign", "origin_country", "baro_altitude", "velocity", "heading", "icao24"]].copy()
-    log_df.columns = ["Status", "Full Callsign", "Country of Origin", "Altitude (ft)", "Ground Speed (km/h)", "Heading Angle", "ICAO24 Transponder"]
-    
-    # Sort so that any active Red "Threat Alerts" bubble straight to the top of the logging array
-    log_df = log_df.sort_values(by="Status", ascending=False)
-    
-    st.dataframe(
-        log_df,
-        height=400,
-        use_container_width=True,
-        hide_index=True
-    )
-
+    # 4. Render the final matrix in full width
+    st.dataframe(df_display, use_container_width=True, hide_index=True)
 st.markdown("--- *Real-Time Airspace Telemetry by AirLabs • Designed & Built by - Satvik (satvik-7773)")
