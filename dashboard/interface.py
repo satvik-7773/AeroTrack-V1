@@ -85,8 +85,12 @@ def fetch_airspace_telemetry():
                 # Fallback to protect dataframe structure integrity on bad rows
                 df_temp.at[idx, "Classification"] = "Standard Track"
     else:
-        # Guarantee empty dataframe still has structural column names for the UI elements
-        df_temp = pd.DataFrame(columns=["Classification", "callsign", "origin_country", "baro_altitude", "velocity", "heading", "icao24", "latitude", "longitude"])
+        # Guarantee empty dataframe has ALL structural column names, including new intelligence metrics
+        df_temp = pd.DataFrame(columns=[
+            "Classification", "callsign", "origin_country", "baro_altitude", 
+            "velocity", "heading", "icao24", "latitude", "longitude",
+            "aircraft_type", "airline_code", "flight_number", "departure_iata", "arrival_iata"
+        ])
         
     return df_temp
 
