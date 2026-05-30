@@ -92,7 +92,7 @@ def fetch_airspace_telemetry():
 
 # --- APPLICATION HEADER ---
 st.title("🛰️ AeroTrack-V1 // Map Aircraft Anomalies in the Airspace")
-st.caption("Real-Time Global Anomaly Detection • Threat Discrimination")
+st.caption("Real-Time Global Aircraft Anomaly Detection • Possible Threat Detection")
 st.divider()
 
 # --- SIDEBAR CONTROLLER ---
@@ -120,7 +120,7 @@ else:
     m1, m2, m3 = st.columns(3)
     m1.metric(label="Total Logged Airspace Tracks", value=f"{total_targets} Targets")
     m2.metric(label="Identified Anomalies / Alerts", value=f"{threat_count} Active")
-    m3.metric(label="Sensor System Array Status", value="LIVE")
+    m3.metric(label="System Status", value="LIVE🔴")
     st.write("")
 
     # SECTION 1: Full-Width Tactical Tracking Map
@@ -181,4 +181,4 @@ else:
         hide_index=True
     )
 
-st.markdown("--- *Static Memory // State Verified Data • Designed & Built by - Satvik (satvik-7773)")
+st.markdown("--- *Real-Time Airspace Telemetry by AirLabs • Designed & Built by - Satvik (satvik-7773)")
