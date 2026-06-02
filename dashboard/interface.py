@@ -43,15 +43,8 @@ def fetch_global_fusion(api_key):
         # Hitting the unrestricted global endpoint of ADSB.lol
         adsb_url = "https://api.adsb.lol/v2/all"
         headers = {"User-Agent": "AeroTrack-Global/1.0"}
-        st.write("ADSB aircraft:", len(tactical_grid))
-        st.write(response.status_code)
-        st.write(response.text[:500])
         
         response = requests.get(adsb_url, headers=headers, timeout=15)
-        st.write("ADSB Status:", response.status_code)
-
-        if response.status_code != 200:
-        st.error(response.text[:500])
         if response.status_code == 200:
             for ac in response.json().get("ac", []):
                 hex_code = str(ac.get("hex", "UNKN")).upper()
@@ -85,104 +78,48 @@ def fetch_global_fusion(api_key):
     except Exception as e:
         st.warning(f"Tactical ADSB.lol Feed Offline: {e}")
 
-   # --- FEED 2: AIRLABS GLOBAL METADATA OVERLAY ---
-try:
-    airlabs_url = f"https://airlabs.co/api/v9/flights?api_key={api_key}"
-    response = requests.get(airlabs_url, timeout=15)
-
-    st.write("AirLabs Status:", response.status_code)
-
-    if response.status_code == 200:
-
-        data = response.json()
-
-        st.write("AirLabs Keys:", list(data.keys()))
-
-        if "response" in data:
-
-            st.write("AirLabs Aircraft:", len(data["response"]))
-
-            if len(data["response"]) > 0:
-                st.json(data["response"][0])
-
-            for ac in data["response"]:
-
+    # --- FEED 2: AIRLABS GLOBAL METADATA OVERLAY ---
+    try:
+        airlabs_url = f"https://airlabs.co/api/v9/flights?api_key={api_key}"
+        response = requests.get(airlabs_url, timeout=15)
+        
+        if response.status_code == 200:
+            for ac in response.json().get("response", []):
                 hex_code = str(ac.get("hex", "UNKN")).upper()
-
-                if hex_code == "UNKN":
+                if hex_code == "UNKN" or ac.get("lat") is None: 
                     continue
-
-                lat = ac.get("lat")
-                lon = ac.get("lng")
-
-                if lat is None or lon is None:
-                    continue
-
+                
                 if hex_code in tactical_grid:
-
-                    al_type = str(
-                        ac.get("aircraft_icao", "UNKN")
-                    ).strip()
-
+                    # Enrich existing ADSB.lol track with AirLabs commercial intelligence
+                    al_type = str(ac.get("aircraft_icao", "UNKN")).strip()
                     if al_type != "UNKN":
                         tactical_grid[hex_code]["aircraft_type"] = al_type
-
-                    tactical_grid[hex_code]["flight_number"] = str(
-                        ac.get(
-                            "flight_iata",
-                            tactical_grid[hex_code]["flight_number"]
-                        )
-                    ).strip()
-
-                    tactical_grid[hex_code]["airline_code"] = str(
-                        ac.get("airline_iata", "UNKN")
-                    ).strip()
-
-                    tactical_grid[hex_code]["departure_iata"] = str(
-                        ac.get("dep_iata", "UNKN")
-                    ).strip()
-
+                        
+                    tactical_grid[hex_code]["flight_number"] = str(ac.get("flight_iata", tactical_grid[hex_code]["flight_number"])).strip()
+                    tactical_grid[hex_code]["airline_code"] = str(ac.get("airline_iata", "UNKN")).strip()
+                    tactical_grid[hex_code]["departure_iata"] = str(ac.get("dep_iata", "UNKN")).strip()
                     tactical_grid[hex_code]["source"] = "Fused Data"
-
                 else:
-
+                    # If AirLabs caught a plane ADSB.lol missed
                     tactical_grid[hex_code] = {
                         "icao24": hex_code,
-                        "callsign": str(
-                            ac.get("flight_iata", "UNKN")
-                        ).strip(),
-                        "latitude": float(lat),
-                        "longitude": float(lon),
-                        "baro_altitude": float(
-                            ac.get("alt", 0)
-                        ) * 3.28084,
-                        "velocity": float(
-                            ac.get("speed", 0.0)
-                        ),
-                        "heading": float(
-                            ac.get("dir", 0.0)
-                        ),
-                        "vertical_rate": float(
-                            ac.get("v_speed", 0.0)
-                        ),
-                        "aircraft_type": str(
-                            ac.get("aircraft_icao", "UNKN")
-                        ),
-                        "flight_number": str(
-                            ac.get("flight_iata", "UNKN")
-                        ),
-                        "airline_code": str(
-                            ac.get("airline_iata", "UNKN")
-                        ),
-                        "departure_iata": str(
-                            ac.get("dep_iata", "UNKN")
-                        ),
+                        "callsign": str(ac.get("flight_iata", "UNKN")).strip(),
+                        "latitude": float(ac.get("lat")),
+                        "longitude": float(ac.get("lon")),
+                        "baro_altitude": float(ac.get("alt", 0)) * 3.28084,
+                        "velocity": float(ac.get("speed", 0.0)),
+                        "heading": float(ac.get("dir", 0.0)),
+                        "vertical_rate": float(ac.get("v_speed", 0.0)),
+                        "aircraft_type": str(ac.get("aircraft_icao", "UNKN")),
+                        "flight_number": str(ac.get("flight_iata", "UNKN")),
+                        "airline_code": str(ac.get("airline_iata", "UNKN")),
+                        "departure_iata": str(ac.get("dep_iata", "UNKN")),
                         "military": False,
                         "source": "AirLabs"
                     }
+    except Exception as e:
+        pass 
 
-except Exception as e:
-    st.error(f"AirLabs Error: {e}")
     # --- DATAFRAME GENERATION & KINEMATICS ---
     final_list = list(tactical_grid.values())
     if not final_list:
@@ -214,7 +151,7 @@ except Exception as e:
         except Exception:
             pass
 
-            
+
             
     return df
 
