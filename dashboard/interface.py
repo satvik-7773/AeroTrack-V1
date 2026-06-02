@@ -54,6 +54,7 @@ def fetch_global_fusion(api_key):
             headers={"User-Agent": "AeroTrack-Global/1.0"},
             timeout=15
        )
+        st.write("Military watchlist size:", len(military_watchlist))
 
         st.write("ADSB-MIL Status:", response.status_code)
 
@@ -64,7 +65,7 @@ def fetch_global_fusion(api_key):
 
             for ac in military_aircraft:
 
-                hex_code = str(ac.get("hex", "")).upper()
+                hex_code = str(ac.get("hex", "")).upper().strip()
 
                 if hex_code:
 
@@ -93,7 +94,7 @@ def fetch_global_fusion(api_key):
         for ac in aircraft_list:
             
             try:
-                hex_code = str(ac.get("hex", "UNKN")).upper()
+                hex_code = str(ac.get("hex", "UNKN")).upper().strip()
 
                 if (
                     hex_code == "UNKN"
@@ -127,6 +128,12 @@ def fetch_global_fusion(api_key):
 
                     if adsb_type:
                         tactical_grid[hex_code]["aircraft_type"] = adsb_type
+                mil_matches = 0
+
+                for hex_code in tactical_grid:
+                    if tactical_grid[hex_code]["military"]:
+                        mil_matches += 1
+                st.write("Military Matches:", mil_matches)        
             
             except Exception as aircraft_error:
                 st.write("Aircraft Parse Error:", aircraft_error)
@@ -134,6 +141,16 @@ def fetch_global_fusion(api_key):
 
     except Exception as e:
         st.error(f"AirLabs Error: {e}")
+
+    adsb_hexes = set(military_watchlist.keys())
+    airlabs_hexes = set(tactical_grid.keys())
+
+    intersection = adsb_hexes.intersection(airlabs_hexes)
+
+    st.write("Military Overlap:", len(intersection))
+    st.write("ADSB Military Count:", len(adsb_hexes))
+    st.write("AirLabs Count:", len(airlabs_hexes))
+    st.write("Military Overlap:", len(intersection))
 
     # --- DATAFRAME GENERATION & KINEMATICS ---
     st.write("Tracks collected:", len(tactical_grid))
