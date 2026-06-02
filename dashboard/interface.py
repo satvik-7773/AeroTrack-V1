@@ -11,7 +11,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # =====================================================================
 # CONFIGURATION
 # =====================================================================
-AIRLABS_API_KEY = "YOUR_AIRLABS_API_KEY_HERE"
+AIRLABS_API_KEY = "4968fc59-348d-4a8a-af4f-73861d867e4e"
 
 st.set_page_config(
     page_title="AeroTrack-V1 // Airspace Monitor",
@@ -66,7 +66,7 @@ def fetch_tactical_theater(airlabs_api_key, center_lat, center_lon):
                 "velocity": speed_kmh, 
                 "heading": float(ac.get("track", 0.0)) if ac.get("track") is not None else 0.0,
                 "vertical_rate": float(ac.get("baro_rate", 0.0)) if ac.get("baro_rate") is not None else 0.0,
-                "military": ac.get("mlat", False) or ac.get("mil", False),
+                "military": True if ac.get("mil", False) else False,
                 "source": "Airplanes.live",
                 "aircraft_type": "UNKN",
                 "flight_number": "UNKN",
