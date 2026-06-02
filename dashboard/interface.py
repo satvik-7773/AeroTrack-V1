@@ -69,7 +69,7 @@ def fetch_global_fusion(api_key):
                     "icao24": hex_code,
                     "callsign": tactical_callsign,
                     "latitude": float(ac.get("lat")),
-                    "longitude": float(ac.get("lon")),
+                   "longitude": float(ac.get("lng")) if ac.get("lng") is not None else 0.0,
                     "baro_altitude": float(ac.get("alt_baro", 0.0)) if isinstance(ac.get("alt_baro"), (int, float)) else 0.0,
                     "velocity": raw_speed_knots * 1.852, # Knots to km/h
                     "heading": float(ac.get("track", 0.0)) if ac.get("track") is not None else 0.0,
@@ -96,40 +96,37 @@ def fetch_global_fusion(api_key):
         
         if response.status_code == 200:
             for ac in response.json().get("response", []):
-                hex_code = str(ac.get("hex", "UNKN")).upper()
-                if hex_code == "UNKN" or ac.get("lat") is None: 
-                    continue
-                
-                if hex_code in tactical_grid:
-                    # Enrich existing ADSB.lol track with AirLabs commercial intelligence
-                    al_type = str(ac.get("aircraft_icao", "UNKN")).strip()
-                    if al_type != "UNKN":
-                        tactical_grid[hex_code]["aircraft_type"] = al_type
-                        
-                    tactical_grid[hex_code]["flight_number"] = str(ac.get("flight_iata", tactical_grid[hex_code]["flight_number"])).strip()
-                    tactical_grid[hex_code]["airline_code"] = str(ac.get("airline_iata", "UNKN")).strip()
-                    tactical_grid[hex_code]["departure_iata"] = str(ac.get("dep_iata", "UNKN")).strip()
-                    tactical_grid[hex_code]["source"] = "Fused Data"
-                else:
-                    # If AirLabs caught a plane ADSB.lol missed
-                    tactical_grid[hex_code] = {
-                        "icao24": hex_code,
-                        "callsign": str(ac.get("flight_iata", "UNKN")).strip(),
-                        "latitude": float(ac.get("lat")),
-                        "longitude": float(ac.get("lon")),
-                        "baro_altitude": float(ac.get("alt") or 0) * 3.28084,
-                        "velocity": float(ac.get("speed") or 0.0),
-                        "heading": float(ac.get("dir") or 0.0),
-                        "vertical_rate": float(ac.get("v_speed") or 0.0),
-                        "aircraft_type": str(ac.get("aircraft_icao", "UNKN")),
-                        "flight_number": str(ac.get("flight_iata", "UNKN")),
-                        "airline_code": str(ac.get("airline_iata", "UNKN")),
-                        "departure_iata": str(ac.get("dep_iata", "UNKN")),
-                        "military": False,
-                        "source": "AirLabs"
-                    }
-    except Exception as e:
-        st.error(f"AirLabs Error: {e}")
+    try:
+        hex_code = str(ac.get("hex", "UNKN")).upper()
+
+        if (
+             hex_code == "UNKN"
+             or ac.get("lat") is None
+             or ac.get("lng") is None
+           ):
+        continue
+
+        tactical_grid[hex_code] = {
+            "icao24": hex_code,
+            "callsign": str(ac.get("flight_iata", "UNKN")).strip(),
+            "latitude": float(ac.get("lat") or 0),
+            "longitude": float(ac.get("lng") or 0),
+            "baro_altitude": float(ac.get("alt") or 0) * 3.28084,
+            "velocity": float(ac.get("speed") or 0),
+            "heading": float(ac.get("dir") or 0),
+            "vertical_rate": float(ac.get("v_speed") or 0),
+            "aircraft_type": str(ac.get("aircraft_icao", "UNKN")),
+            "flight_number": str(ac.get("flight_iata", "UNKN")),
+            "airline_code": str(ac.get("airline_iata", "UNKN")),
+            "departure_iata": str(ac.get("dep_iata", "UNKN")),
+            "military": False,
+            "source": "AirLabs"
+        }
+
+    except Exception as aircraft_error:
+        st.write("Aircraft Parse Error:", aircraft_error)
+        st.write(ac)
+        continue
 
     # --- DATAFRAME GENERATION & KINEMATICS ---
     st.write("Tracks collected:", len(tactical_grid))
