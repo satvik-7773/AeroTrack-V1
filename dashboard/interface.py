@@ -4,17 +4,15 @@ import requests
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+from client import OpenSkyClient
 
-# =====================================================================
-# CONFIGURATION
-# =====================================================================
-# Securely pulling the AirLabs API Key from Streamlit Secrets
-if "AIRLABS_API_KEY" in st.secrets:
-    AIRLABS_API_KEY = st.secrets["AIRLABS_API_KEY"]
-else:
+client = OpenSkyClient()
+
+if not client.api_key:
     st.error("🚨 CRITICAL: 'AIRLABS_API_KEY' not found in Streamlit Secrets.")
     st.stop()
-st.set_page_config(
+    
+    
     page_title="AeroTrack-V1 // Global Tactical Monitor",
     page_icon="🛰️",
     layout="wide",
