@@ -64,12 +64,12 @@ def fetch_global_fusion(api_key):
        )
         
 
-        st.write("ADSB-MIL Status:", response.status_code)
+        
 
         if response.status_code == 200:
             military_aircraft = response.json().get("ac", [])
 
-            st.write("Military Aircraft:", len(military_aircraft))
+            
 
             military_tracks = []
 
@@ -109,13 +109,12 @@ def fetch_global_fusion(api_key):
         airlabs_url = f"https://airlabs.co/api/v9/flights?api_key={api_key}"
         response = requests.get(airlabs_url, timeout=15)
 
-        st.write("AirLabs Status:", response.status_code)
-        st.write("AirLabs Length:", len(response.text))
+        
         aircraft_list = []
         if response.status_code == 200:
             aircraft_list = response.json().get("response", [])
 
-        st.write("Aircraft received:", len(aircraft_list))
+        
         for ac in aircraft_list:
             
             try:
@@ -170,13 +169,11 @@ def fetch_global_fusion(api_key):
 
     intersection = adsb_hexes.intersection(airlabs_hexes)
 
-    st.write("Military Overlap:", len(intersection))
-    st.write("ADSB Military Count:", len(adsb_hexes))
-    st.write("AirLabs Count:", len(airlabs_hexes))
+    
     
 
     # --- DATAFRAME GENERATION & KINEMATICS ---
-    st.write("Tracks collected:", len(tactical_grid))
+    
     final_list = list(tactical_grid.values())
     if not final_list:
         return pd.DataFrame()
@@ -191,11 +188,9 @@ def fetch_global_fusion(api_key):
 
 
     if not mil_df.empty:
-        st.write("Military Tracks Built:", len(military_tracks))
+        
         df = pd.concat([df, mil_df], ignore_index=True)
-        st.write("AirLabs Tracks:", len(final_list))
-        st.write("Military Tracks:", len(mil_df))
-        st.write("Combined Tracks:", len(df))
+        
     
     # Stable Kinematics
     if "Classification" not in df.columns:
