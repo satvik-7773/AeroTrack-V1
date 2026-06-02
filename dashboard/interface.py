@@ -41,88 +41,98 @@ st.markdown("""
 def fetch_global_unfiltered_airspace(airlabs_api_key):
     tactical_grid = {}
 
-    # --- INGEST AIRPLANES.LIVE (THE RAW MAP STATE DUMP) ---
-    try:
-        # Bypassing the locked API by pulling the raw tar1090 map state file
-        adsb_url = "https://globe.airplanes.live/data/aircraft.json"
+    # --- THE STEALTH BYPASS HEADERS ---
+    # Spoofing a complete Chrome AJAX payload to bypass Cloudflare WAF 403s
+    stealth_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate", 
+        "Connection": "keep-alive",
+        "X-Requested-With": "XMLHttpRequest",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin"
+    }
+
+    # --- THE OSINT REDUNDANCY LOOP ---
+    # If one network locks down, instantly pivot to the next open-source radar
+    mirrors = [
+        ("Airplanes.live", "https://globe.airplanes.live/data/aircraft.json"),
+        ("ADSB.fi", "https://globe.adsb.fi/data/aircraft.json"),
+        ("ADSB.lol", "https://globe.adsb.lol/data/aircraft.json")
+    ]
+
+    active_source = "UNKN"
+    payload = []
+
+    for source_name, url in mirrors:
+        try:
+            # Dynamically spoof the Referer and Origin to match the target mirror
+            base_domain = "/".join(url.split("/")[:3]) + "/"
+            stealth_headers["Referer"] = base_domain
+            stealth_headers["Origin"] = base_domain[:-1]
+            
+            response = requests.get(url, headers=stealth_headers, timeout=12)
+            
+            # If we breach the firewall, grab the data and break the loop
+            if response.status_code == 200:
+                payload = response.json().get("aircraft", [])
+                active_source = source_name
+                break 
+        except Exception:
+            continue # If connection drops or 403 hits, immediately try next mirror
+
+    # Cold Start Safeguard if all networks are enforcing high security
+    if not payload:
+        st.error("Global Radar Blocked: Cloudflare WAF actively repelled the connection on all OSINT mirrors. High security mode detected.")
+        return pd.DataFrame(columns=[
+            "icao24", "callsign", "latitude", "longitude", "baro_altitude", 
+            "velocity", "heading", "vertical_rate", "military", "source",
+            "aircraft_type", "flight_number", "airline_code", "departure_iata", "Classification"
+        ])
+
+    # --- PARSE THE RAW TACTICAL PAYLOAD ---
+    for ac in payload:
+        hex_code = str(ac.get("hex", "UNKN")).upper()
+        if hex_code == "UNKN": 
+            continue
         
-        # Spoofing Chrome to prevent 403 Forbidden/404 errors
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
-            "Accept": "application/json"
+        raw_speed_knots = float(ac.get("gs", 0.0)) if ac.get("gs") is not None else 0.0
+        speed_kmh = raw_speed_knots * 1.852 
+        
+        tactical_grid[hex_code] = {
+            "icao24": hex_code,
+            "callsign": str(ac.get("flight", "UNKN")).strip(),
+            "latitude": ac.get("lat"),
+            "longitude": ac.get("lon"),
+            "baro_altitude": float(ac.get("alt_baro", 0.0)) if isinstance(ac.get("alt_baro"), (int, float)) else 0.0,
+            "velocity": speed_kmh, 
+            "heading": float(ac.get("track", 0.0)) if ac.get("track") is not None else 0.0,
+            "vertical_rate": float(ac.get("baro_rate", 0.0)) if ac.get("baro_rate") is not None else 0.0,
+            "military": True if ac.get("mil", False) else False, 
+            "source": active_source, # Dynamically tracks which server survived the ping
+            "aircraft_type": "UNKN",
+            "flight_number": "UNKN",
+            "airline_code": "UNKN",
+            "departure_iata": "UNKN"
         }
-        
-        response = requests.get(adsb_url, headers=headers, timeout=15)
-        response.raise_for_status()
-        
-        # tar1090 map JSON uses 'aircraft' array
-        for ac in response.json().get("aircraft", []):
-            hex_code = str(ac.get("hex", "UNKN")).upper()
-            if hex_code == "UNKN": 
-                continue
-            
-            raw_speed_knots = float(ac.get("gs", 0.0)) if ac.get("gs") is not None else 0.0
-            speed_kmh = raw_speed_knots * 1.852 
-            
-            tactical_grid[hex_code] = {
-                "icao24": hex_code,
-                "callsign": str(ac.get("flight", "UNKN")).strip(),
-                "latitude": ac.get("lat"),
-                "longitude": ac.get("lon"),
-                "baro_altitude": float(ac.get("alt_baro", 0.0)) if isinstance(ac.get("alt_baro"), (int, float)) else 0.0,
-                "velocity": speed_kmh, 
-                "heading": float(ac.get("track", 0.0)) if ac.get("track") is not None else 0.0,
-                "vertical_rate": float(ac.get("baro_rate", 0.0)) if ac.get("baro_rate") is not None else 0.0,
-                # Strictly checking for 'mil', ignoring MLAT strings to prevent false military flags
-                "military": True if ac.get("mil", False) else False, 
-                "source": "Airplanes.live",
-                # Default intelligence fields in case AirLabs misses a hex (prevents Plotly crashes)
-                "aircraft_type": "UNKN",
-                "flight_number": "UNKN",
-                "airline_code": "UNKN",
-                "departure_iata": "UNKN"
-            }
-    except Exception as e:
-        st.error(f"Tactical Global Feed Error: {e}")
 
     # --- INGEST AIRLABS (GLOBAL METADATA MERGE) ---
     try:
-        # Hitting the global AirLabs feed to guarantee metadata population
         airlabs_url = f"https://airlabs.co/api/v9/flights?api_key={airlabs_api_key}"
         response = requests.get(airlabs_url, timeout=15)
-        response.raise_for_status()
-        
-        for ac in response.json().get("response", []):
-            hex_code = str(ac.get("hex", "UNKN")).upper()
-            if hex_code == "UNKN": 
-                continue
-            
-            # THE MERGE: Overwrite the "UNKN" defaults with actual civil intelligence
-            if hex_code in tactical_grid:
-                tactical_grid[hex_code]["aircraft_type"] = ac.get("aircraft_icao", "UNKN")
-                tactical_grid[hex_code]["flight_number"] = ac.get("flight_iata", "UNKN")
-                tactical_grid[hex_code]["airline_code"] = ac.get("airline_iata", "UNKN")
-                tactical_grid[hex_code]["departure_iata"] = ac.get("dep_iata", "UNKN")
-            else:
-                # If AirLabs caught a plane that the tactical feed missed entirely
-                tactical_grid[hex_code] = {
-                    "icao24": hex_code,
-                    "callsign": str(ac.get("flight_iata", "UNKN")).strip(),
-                    "latitude": ac.get("lat"),
-                    "longitude": ac.get("lon"),
-                    "baro_altitude": float(ac.get("alt", 0)) * 3.28084,
-                    "velocity": float(ac.get("speed", 0.0)) if ac.get("speed") is not None else 0.0,
-                    "heading": float(ac.get("dir", 0.0)) if ac.get("dir") is not None else 0.0,
-                    "vertical_rate": float(ac.get("v_speed", 0.0)) if ac.get("v_speed") is not None else 0.0,
-                    "aircraft_type": ac.get("aircraft_icao", "UNKN"),
-                    "flight_number": ac.get("flight_iata", "UNKN"),
-                    "airline_code": ac.get("airline_iata", "UNKN"),
-                    "departure_iata": ac.get("dep_iata", "UNKN"),
-                    "military": False,
-                    "source": "AirLabs"
-                }
+        if response.status_code == 200:
+            for ac in response.json().get("response", []):
+                hex_code = str(ac.get("hex", "UNKN")).upper()
+                if hex_code in tactical_grid:
+                    tactical_grid[hex_code]["aircraft_type"] = ac.get("aircraft_icao", "UNKN")
+                    tactical_grid[hex_code]["flight_number"] = ac.get("flight_iata", "UNKN")
+                    tactical_grid[hex_code]["airline_code"] = ac.get("airline_iata", "UNKN")
+                    tactical_grid[hex_code]["departure_iata"] = ac.get("dep_iata", "UNKN")
     except Exception as e:
-        st.error(f"AirLabs Global Feed Error: {e}")
+        # Graceful degradation: If AirLabs fails, tactical coordinates still render
+        st.warning(f"AirLabs Metadata Merge Failed: {e}. Tactical grid will show UNKN for civil types.")
 
     # --- SANITIZATION & DATAFRAME CREATION ---
     final_list = [t for t in tactical_grid.values() if t.get("latitude") is not None and t.get("longitude") is not None]
@@ -138,7 +148,6 @@ def fetch_global_unfiltered_airspace(airlabs_api_key):
     
     # --- KINEMATIC ANOMALY ENGINE ---
     df_temp["Classification"] = "Standard Track"
-    # Extended business jet list to cover standard high-altitude flyers
     biz_jets = ["GLEX", "GLF4", "GLF5", "GLF6", "CL30", "CL60", "F900", "FA7X", "C750", "E55P", "C56X"]
     
     for idx, row in df_temp.iterrows():
