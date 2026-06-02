@@ -44,6 +44,8 @@ def fetch_global_fusion(api_key):
         adsb_url = "https://api.adsb.lol/v2/all"
         headers = {"User-Agent": "AeroTrack-Global/1.0"}
         st.write("ADSB aircraft:", len(tactical_grid))
+        st.write(response.status_code)
+        st.write(response.text[:500])
         
         response = requests.get(adsb_url, headers=headers, timeout=15)
         if response.status_code == 200:
@@ -87,7 +89,12 @@ def fetch_global_fusion(api_key):
         st.write(response.json())
         
         if response.status_code == 200:
-            for ac in response.json().get("response", []):
+            data = response.json()
+
+            st.write("Total AirLabs records:", len(data.get("response", [])))
+
+            sample = data["response"][0]
+            st.json(sample)
                 hex_code = str(ac.get("hex", "UNKN")).upper()
                 if hex_code == "UNKN" or ac.get("lat") is None: 
                     continue
