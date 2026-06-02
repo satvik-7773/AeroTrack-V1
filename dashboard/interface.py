@@ -10,7 +10,7 @@ import plotly.express as px
 # =====================================================================
 # Securely pulling the AirLabs API Key from Streamlit Secrets
 try:
-    AIRLABS_API_KEY = st.secrets.get["AIRLABS_API_KEY"]
+    st.AIRLABS_API_KEY = st.secrets.get["AIRLABS_API_KEY" , ""]
 except KeyError:
     st.error("🚨 CRITICAL ERROR: 'AIRLABS_API_KEY' not found in Streamlit Secrets. Please check your settings.")
     st.stop()
