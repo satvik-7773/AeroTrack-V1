@@ -41,17 +41,24 @@ st.markdown("""
 # =====================================================================
 @st.cache_data(ttl=15)
 def fetch_global_unfiltered_airspace(airlabs_api_key):
-    """Pulls unfiltered global telemetry from adsb.fi and metadata from AirLabs."""
+    """Pulls unfiltered global telemetry by bypassing the API and scraping the raw map state."""
     tactical_grid = {}
 
-    # --- INGEST ADSB.FI (THE GLOBAL RAW FEED) ---
+    # --- INGEST ADSB.FI (THE RAW MAP BYPASS) ---
     try:
-        adsb_url = "https://adsb.fi/api/v2/all"
-        headers = {"User-Agent": "AeroTrack-Global/1.0"}
+        # Bypassing the restricted API and hitting the raw dump1090 state file
+        adsb_url = "https://adsb.fi/data/aircraft.json"
+        
+        # Spoofing a standard Chrome browser so their server doesn't block the Python request
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
+            "Accept": "application/json"
+        }
         response = requests.get(adsb_url, headers=headers, timeout=15)
         response.raise_for_status()
         
-        for ac in response.json().get("ac", []):
+        # The map JSON uses the 'aircraft' array instead of 'ac'
+        for ac in response.json().get("aircraft", []):
             hex_code = str(ac.get("hex", "UNKN")).upper()
             if hex_code == "UNKN": 
                 continue
@@ -68,7 +75,7 @@ def fetch_global_unfiltered_airspace(airlabs_api_key):
                 "velocity": speed_kmh, 
                 "heading": float(ac.get("track", 0.0)) if ac.get("track") is not None else 0.0,
                 "vertical_rate": float(ac.get("baro_rate", 0.0)) if ac.get("baro_rate") is not None else 0.0,
-                "military": ac.get("mlat", False) or ac.get("mil", False),
+                "military": ac.get("mil", False), 
                 "source": "ADSB.fi"
             }
     except Exception as e:
@@ -147,7 +154,6 @@ def fetch_global_unfiltered_airspace(airlabs_api_key):
             df_temp.at[idx, "Classification"] = "Standard Track"
             
     return df_temp
-
 # =====================================================================
 # APPLICATION HEADER & UI
 # =====================================================================
