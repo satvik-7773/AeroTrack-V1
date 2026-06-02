@@ -120,11 +120,14 @@ def fetch_global_fusion(api_key):
                 }
                 
                 if hex_code in military_watchlist:
-                    adsb_type = military_watchlist[hex_code]["aircraft_type"]
 
-                if adsb_type:
-                    tactical_grid[hex_code]["aircraft_type"] = adsb_type
+                    tactical_grid[hex_code]["military"] = True
 
+                    adsb_type = military_watchlist[hex_code].get("aircraft_type")
+
+                    if adsb_type:
+                        tactical_grid[hex_code]["aircraft_type"] = adsb_type
+            
             except Exception as aircraft_error:
                 st.write("Aircraft Parse Error:", aircraft_error)
                 continue
