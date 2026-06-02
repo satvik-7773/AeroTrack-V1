@@ -67,7 +67,11 @@ def fetch_tactical_theater(airlabs_api_key, center_lat, center_lon):
                 "heading": float(ac.get("track", 0.0)) if ac.get("track") is not None else 0.0,
                 "vertical_rate": float(ac.get("baro_rate", 0.0)) if ac.get("baro_rate") is not None else 0.0,
                 "military": ac.get("mlat", False) or ac.get("mil", False),
-                "source": "Airplanes.live"
+                "source": "Airplanes.live",
+                "aircraft_type": "UNKN",
+                "flight_number": "UNKN",
+                "airline_code": "UNKN",
+                "departure_iata": "UNKN"
             }
     except Exception as e:
         st.error(f"Tactical Radius Feed Error: {e}")
