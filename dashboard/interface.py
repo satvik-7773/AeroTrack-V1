@@ -11,6 +11,7 @@ from data_ingestion.client import OpenSkyClient
 
 client = OpenSkyClient()
 
+
 if not client.api_key:
     st.error("🚨 CRITICAL: 'AIRLABS_API_KEY' not found in Streamlit Secrets.")
     st.stop()
@@ -171,7 +172,7 @@ if st.sidebar.button("📡 Execute Global Fusion Sweep", width="stretch"):
     st.toast("Executing full planetary sweep...", icon="🌍")
 
 with st.spinner("Stitching 15,000+ global tactical tracks with commercial metadata..."):
-    df = fetch_global_fusion(AIRLABS_API_KEY)
+    df = fetch_global_fusion(client.api_key)
 
 # --- GRAPHICS RENDERING LAYER ---
 if df.empty:
