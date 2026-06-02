@@ -54,7 +54,7 @@ def fetch_global_fusion(api_key):
             headers={"User-Agent": "AeroTrack-Global/1.0"},
             timeout=15
        )
-        st.write("Military watchlist size:", len(military_watchlist))
+        
 
         st.write("ADSB-MIL Status:", response.status_code)
 
@@ -62,6 +62,8 @@ def fetch_global_fusion(api_key):
             military_aircraft = response.json().get("ac", [])
 
             st.write("Military Aircraft:", len(military_aircraft))
+
+            military_tracks = []
 
             for ac in military_aircraft:
 
@@ -73,7 +75,19 @@ def fetch_global_fusion(api_key):
                         "callsign": str(ac.get("flight", "")).strip(),
                         "aircraft_type": str(ac.get("t", "")).strip()
                    }
+                
 
+                for ac in military_aircraft:
+                    military_tracks.append({
+                        "icao24": str(ac.get("hex", "")).upper(),
+                        "callsign": str(ac.get("flight", "")).strip(),
+                        "latitude": float(ac.get("lat") or 0),
+                        "longitude": float(ac.get("lon") or 0),
+                        "aircraft_type": str(ac.get("t", "")),
+                        "military": True,
+                        "source": "ADSB-MIL",
+                        "Classification": "Military Asset"
+          })
     except Exception as e:
         st.warning(f"ADSB Military Feed Offline: {e}")
 
@@ -116,9 +130,10 @@ def fetch_global_fusion(api_key):
                     "flight_number": str(ac.get("flight_iata", "UNKN")),
                     "airline_code": str(ac.get("airline_iata", "UNKN")),
                     "departure_iata": str(ac.get("dep_iata", "UNKN")),
-                    "military": hex_code in military_watchlist,
+                    
                     "source": "AirLabs"
                 }
+                
                 
                 if hex_code in military_watchlist:
 
@@ -130,10 +145,7 @@ def fetch_global_fusion(api_key):
                         tactical_grid[hex_code]["aircraft_type"] = adsb_type
                 mil_matches = 0
 
-                for hex_code in tactical_grid:
-                    if tactical_grid[hex_code]["military"]:
-                        mil_matches += 1
-                st.write("Military Matches:", mil_matches)        
+                       
             
             except Exception as aircraft_error:
                 st.write("Aircraft Parse Error:", aircraft_error)
@@ -159,6 +171,10 @@ def fetch_global_fusion(api_key):
         return pd.DataFrame()
         
     df = pd.DataFrame(final_list)
+    mil_df = pd.DataFrame(military_tracks)
+
+    if not mil_df.empty:
+        df = pd.concat([df, mil_df], ignore_index=True)
     
     # Stable Kinematics
     df["Classification"] = "Standard Track"
