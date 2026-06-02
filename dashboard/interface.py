@@ -9,12 +9,11 @@ import plotly.express as px
 # CONFIGURATION
 # =====================================================================
 # Securely pulling the AirLabs API Key from Streamlit Secrets
-try:
-    st.AIRLABS_API_KEY = st.secrets.get["AIRLABS_API_KEY" , ""]
-except KeyError:
-    st.error("🚨 CRITICAL ERROR: 'AIRLABS_API_KEY' not found in Streamlit Secrets. Please check your settings.")
+if "AIRLABS_API_KEY" in st.secrets:
+    AIRLABS_API_KEY = st.secrets["AIRLABS_API_KEY"]
+else:
+    st.error("🚨 CRITICAL: 'AIRLABS_API_KEY' not found in Streamlit Secrets.")
     st.stop()
-
 st.set_page_config(
     page_title="AeroTrack-V1 // Global Tactical Monitor",
     page_icon="🛰️",
