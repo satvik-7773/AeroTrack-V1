@@ -128,7 +128,7 @@ def fetch_global_fusion(api_key):
                         "source": "AirLabs"
                     }
     except Exception as e:
-    st.error(f"AirLabs Error: {e}")
+        st.error(f"AirLabs Error: {e}")
 
     # --- DATAFRAME GENERATION & KINEMATICS ---
     st.write("Tracks collected:", len(tactical_grid))
