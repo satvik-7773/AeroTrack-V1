@@ -1,16 +1,19 @@
-
-
 import sys
 import os
-
-# Dynamically append the project root directory to the Python tracking path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
+import requests
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 import time
-from data_ingestion.client import OpenSkyClient
+
+# Dynamically append the project root directory to the Python tracking path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# =====================================================================
+# CONFIGURATION
+# =====================================================================
+# Insert your AirLabs API Key here (or use st.secrets["AIRLABS_API_KEY"])
+AIRLABS_API_KEY = "4968fc59-348d-4a8a-af4f-73861d867e4e"
 
 # Page configuration for tactical full-width dark-mode radar grid
 st.set_page_config(
@@ -33,78 +36,121 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# Initialize the underlying ingestion client node
-client = OpenSkyClient()
+# =====================================================================
+# 1. CORE DATA INGESTION ENGINE (UNFILTERED GLOBAL SWEEP)
+# =====================================================================
+@st.cache_data(ttl=15)
+def fetch_global_unfiltered_airspace(airlabs_api_key):
+    """Pulls unfiltered global telemetry from adsb.fi and metadata from AirLabs."""
+    tactical_grid = {}
 
-# --- DATA MEMORY BUFFER SHIELD ---
-@st.cache_data(ttl=60)
-def fetch_airspace_telemetry():
-    """Queries the AirLabs data pipeline and structures the incoming vectors."""
-    raw_payload = client.poll_airspace_matrix()
-    parsed_vectors = client.parse_state_vectors(raw_payload)
+    # --- INGEST ADSB.FI (THE GLOBAL RAW FEED) ---
+    try:
+        adsb_url = "https://adsb.fi/api/v2/all"
+        headers = {"User-Agent": "AeroTrack-Global/1.0"}
+        response = requests.get(adsb_url, headers=headers, timeout=15)
+        response.raise_for_status()
+        
+        for ac in response.json().get("ac", []):
+            hex_code = str(ac.get("hex", "UNKN")).upper()
+            if hex_code == "UNKN": 
+                continue
+            
+            raw_speed_knots = float(ac.get("gs", 0.0)) if ac.get("gs") is not None else 0.0
+            speed_kmh = raw_speed_knots * 1.852 
+            
+            tactical_grid[hex_code] = {
+                "icao24": hex_code,
+                "callsign": str(ac.get("flight", "UNKN")).strip(),
+                "latitude": ac.get("lat"),
+                "longitude": ac.get("lon"),
+                "baro_altitude": float(ac.get("alt_baro", 0.0)) if isinstance(ac.get("alt_baro"), (int, float)) else 0.0,
+                "velocity": speed_kmh, 
+                "heading": float(ac.get("track", 0.0)) if ac.get("track") is not None else 0.0,
+                "vertical_rate": float(ac.get("baro_rate", 0.0)) if ac.get("baro_rate") is not None else 0.0,
+                "military": ac.get("mlat", False) or ac.get("mil", False),
+                "source": "ADSB.fi"
+            }
+    except Exception as e:
+        st.error(f"Tactical Global Feed Error: {e}")
+
+    # --- INGEST AIRLABS (CIVILIAN METADATA OVERLAY) ---
+    try:
+        airlabs_url = f"https://airlabs.co/api/v9/flights?api_key={airlabs_api_key}"
+        response = requests.get(airlabs_url, timeout=15)
+        response.raise_for_status()
+        
+        for ac in response.json().get("response", []):
+            hex_code = str(ac.get("hex", "UNKN")).upper()
+            if hex_code == "UNKN": 
+                continue
+            
+            if hex_code in tactical_grid:
+                tactical_grid[hex_code]["aircraft_type"] = ac.get("aircraft_icao", "UNKN")
+                tactical_grid[hex_code]["flight_number"] = ac.get("flight_iata", "UNKN")
+                tactical_grid[hex_code]["airline_code"] = ac.get("airline_iata", "UNKN")
+                tactical_grid[hex_code]["departure_iata"] = ac.get("dep_iata", "UNKN")
+            else:
+                tactical_grid[hex_code] = {
+                    "icao24": hex_code,
+                    "callsign": str(ac.get("flight_iata", "UNKN")).strip(),
+                    "latitude": ac.get("lat"),
+                    "longitude": ac.get("lon"),
+                    "baro_altitude": float(ac.get("alt", 0)) * 3.28084,
+                    "velocity": float(ac.get("speed", 0.0)) if ac.get("speed") is not None else 0.0,
+                    "heading": float(ac.get("dir", 0.0)) if ac.get("dir") is not None else 0.0,
+                    "vertical_rate": float(ac.get("v_speed", 0.0)) if ac.get("v_speed") is not None else 0.0,
+                    "aircraft_type": ac.get("aircraft_icao", "UNKN"),
+                    "flight_number": ac.get("flight_iata", "UNKN"),
+                    "airline_code": ac.get("airline_iata", "UNKN"),
+                    "departure_iata": ac.get("dep_iata", "UNKN"),
+                    "military": False,
+                    "source": "AirLabs"
+                }
+    except Exception as e:
+        st.error(f"AirLabs Global Feed Error: {e}")
+
+    # --- SANITIZATION & DATAFRAME CREATION ---
+    final_list = [t for t in tactical_grid.values() if t.get("latitude") is not None and t.get("longitude") is not None]
     
-    if not parsed_vectors:
-        return pd.DataFrame()
-        
-    df_temp = pd.DataFrame(parsed_vectors)
-    
-    # Clean up callsign strings to ensure full format (e.g., "AI111")
-    if "callsign" in df_temp.columns:
-        df_temp["callsign"] = df_temp["callsign"].str.upper().str.strip()
-        
-   # --- KINEMATIC ANOMALY & PHYSICS ENFORCEMENT ENGINE ---
-    # --- DYNAMIC RELATIONAL ENVELOPE & TRUE ANOMALY ENGINE ---
-    if not df_temp.empty:
-        df_temp["Classification"] = "Standard Track"
-        
-        # High-altitude business jets that routinely fly above commercial ceilings
-        biz_jets = ["GLEX", "GLF4", "GLF5", "GLF6", "CL30", "CL60", "F900", "FA7X", "C750"]
-        
-        for idx, row in df_temp.iterrows():
-            try:
-                velocity = float(row.get("velocity", 0.0))
-                altitude = float(row.get("baro_altitude", 0.0))
-                vert_rate = abs(float(row.get("vertical_rate", 0.0)))
-                aircraft_type = str(row.get("aircraft_type", "UNKN")).upper().strip()
-                icao24 = str(row.get("icao24", "UNKN")).upper().strip()
-                
-                # --- RULE 1: THE DRAG-LIMIT VIOLATION (Spoofed Aerodynamics) ---
-                # It is physically impossible for a civil airliner to do 850+ km/h below 15,000 ft. 
-                # This indicates a tactical asset or a spoofed transponder hiding down low.
-                is_low_alt_dash = (altitude < 15000 and velocity > 850)
-                
-                # --- RULE 2: AIRFRAME-SPECIFIC CEILING BREACH ---
-                # Dynamically set the ceiling based on the aircraft type to stop false alarms on private jets
-                max_ceiling = 51000 if aircraft_type in biz_jets else 43500
-                is_ceiling_breach = (altitude > max_ceiling)
-                
-                # --- RULE 3: TAILWIND PROTECTED DASH LIMIT ---
-                # A plane at 40k ft can easily hit 1150 km/h with a jetstream (Standard).
-                # We only flag if it exceeds 1200 km/h, OR if it hits Mach 1 at medium altitudes.
-                is_true_dash = (velocity > 1250) or (velocity > 1050 and altitude < 28000)
-                
-                # --- RULE 4: HARDWARE METADATA TAMPERING ---
-                # A valid ICAO24 code is exactly 6 hex characters. Spoofed SDRs often transmit 
-                # corrupted hexes or default strings while still projecting a civil callsign.
-                is_malformed_hex = (icao24 != "UNKN" and len(icao24) != 6)
-                
-                # --- EVALUATION ---
-                if is_low_alt_dash or is_ceiling_breach or is_true_dash or is_malformed_hex:
-                    df_temp.at[idx, "Classification"] = "Threat Alert"
-                    
-            except Exception:
-                df_temp.at[idx, "Classification"] = "Standard Track"
-    else:
-        # Guarantee empty dataframe has ALL structural column names, including new intelligence metrics
-        df_temp = pd.DataFrame(columns=[
-            "Classification", "callsign", "origin_country", "baro_altitude", 
-            "velocity", "heading", "icao24", "latitude", "longitude",
-            "aircraft_type", "airline_code", "flight_number", "departure_iata", "arrival_iata"
+    if not final_list:
+        return pd.DataFrame(columns=[
+            "icao24", "callsign", "latitude", "longitude", "baro_altitude", 
+            "velocity", "heading", "vertical_rate", "military", "source",
+            "aircraft_type", "flight_number", "airline_code", "departure_iata", "Classification"
         ])
         
+    df_temp = pd.DataFrame(final_list)
+    
+    # --- KINEMATIC ANOMALY & PHYSICS ENFORCEMENT ENGINE ---
+    df_temp["Classification"] = "Standard Track"
+    biz_jets = ["GLEX", "GLF4", "GLF5", "GLF6", "CL30", "CL60", "F900", "FA7X", "C750"]
+    
+    for idx, row in df_temp.iterrows():
+        try:
+            velocity = float(row.get("velocity", 0.0))
+            altitude = float(row.get("baro_altitude", 0.0))
+            aircraft_type = str(row.get("aircraft_type", "UNKN")).upper().strip()
+            icao24 = str(row.get("icao24", "UNKN")).upper().strip()
+            is_military = row.get("military", False)
+            
+            is_low_alt_dash = (altitude < 15000 and velocity > 850)
+            max_ceiling = 51000 if aircraft_type in biz_jets else 44000
+            is_ceiling_breach = (altitude > max_ceiling)
+            is_true_dash = (velocity > 1250) or (velocity > 1050 and altitude < 28000)
+            is_malformed_hex = (icao24 != "UNKN" and len(icao24) != 6)
+            
+            if is_low_alt_dash or is_ceiling_breach or is_true_dash or is_malformed_hex or is_military:
+                df_temp.at[idx, "Classification"] = "Threat Alert"
+                
+        except Exception:
+            df_temp.at[idx, "Classification"] = "Standard Track"
+            
     return df_temp
 
-# --- APPLICATION HEADER ---
+# =====================================================================
+# APPLICATION HEADER & UI
+# =====================================================================
 st.title("🛰️ AeroTrack-V1 // Map Aircraft Anomalies in the Airspace")
 st.caption("Real-Time Global Aircraft Anomaly Detection • Possible Threat Detection")
 st.divider()
@@ -112,16 +158,16 @@ st.divider()
 # --- SIDEBAR CONTROLLER ---
 st.sidebar.header("Global Airspace Map")
 st.sidebar.markdown("Execute the 'Refresh The Aircraft Coordinates' command to perform a radar sweep")
-st.sidebar.info("💡Map Refresh Requests are Capped to 1Req per minute for Efficiency of the Tool !")
+st.sidebar.info("💡 Map Refresh Requests are processed locally. Global payloads pull 15k+ targets.")
 
 # --- SCAN TRIGGER CONTROLLER ---
 if st.button("📡 Refresh The Aircraft Coordinates", use_container_width=True):
     st.cache_data.clear()
-    st.toast("Radar sweep dispatched!", icon="🚀")
+    st.toast("Global radar sweep dispatched!", icon="🚀")
 
 # Ingest and process telemetry matrix
-with st.spinner("Synchronizing global aircraft positions...."):
-    df = fetch_airspace_telemetry()
+with st.spinner("Synchronizing global unfiltered aircraft positions...."):
+    df = fetch_global_unfiltered_airspace(AIRLABS_API_KEY)
 
 # --- GRAPHICS RENDERING LAYER ---
 if df.empty:
@@ -150,11 +196,11 @@ else:
             "aircraft_type": True,
             "flight_number": True,
             "departure_iata": True,
-            "origin_country": True, 
             "baro_altitude": True, 
             "velocity": True,
+            "military": True,  # New data point added to map
+            "source": True,    # New data point added to map
             "Classification": True
-            
         },
         color="Classification",
         color_discrete_map={"Standard Track": "#00ffff", "Threat Alert": "#ff0033"}, 
@@ -180,18 +226,19 @@ else:
     )
     
     st.plotly_chart(fig, use_container_width=True)
-# --- AIRBORNE LOG MATRIX (TABLE UI) ---
+
+    # --- AIRBORNE LOG MATRIX (TABLE UI) ---
     st.divider()
     st.subheader("Active Airspace Intelligence Log")
     
     # 1. Select only the most relevant columns for the tactical display
-    # (We drop raw lat/lon to save screen space, keeping pure intelligence)
     display_columns = [
         "Classification", 
         "flight_number",
         "airline_code",
         "aircraft_type",
         "departure_iata",
+        "military",       # Added to table for quick tactical reference
         "baro_altitude", 
         "velocity", 
         "heading", 
@@ -209,6 +256,7 @@ else:
         "airline_code": "Operator ID",
         "aircraft_type": "Airframe",
         "departure_iata": "Origin (IATA)",
+        "military": "Mil Asset",
         "baro_altitude": "Altitude (ft)",
         "velocity": "Ground Speed (km/h)",
         "heading": "Track (°)",
@@ -220,8 +268,9 @@ else:
         # Create a custom sorting index (Threats get a 0, Standards get a 1)
         df_display["_sort_rank"] = df_display["Threat Status"].apply(lambda x: 0 if x == "Threat Alert" else 1)
         df_display = df_display.sort_values(by=["_sort_rank", "Altitude (ft)"], ascending=[True, False])
-        df_display = df_display.drop(columns=["_sort_rank"]) # Hide the sorting logic from the UI
+        df_display = df_display.drop(columns=["_sort_rank"])
 
     # 4. Render the final matrix in full width
     st.dataframe(df_display, use_container_width=True, hide_index=True)
-st.markdown("--- *Real-Time Airspace Telemetry by AirLabs • Designed & Built by - Satvik (satvik-7773)")
+
+st.markdown("--- *Real-Time Airspace Telemetry by AirLabs & ADSB.fi • Designed & Built by - Satvik (satvik-7773)*")
