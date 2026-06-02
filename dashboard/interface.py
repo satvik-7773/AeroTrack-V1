@@ -44,55 +44,48 @@ except Exception as e:
 def fetch_global_fusion(api_key):
     tactical_grid = {}
 
-    # --- FEED 1: UNFILTERED GLOBAL TACTICAL RADAR (ADSB.lol) ---
+   # --- FEED 1: ADSB.LOL MILITARY OVERLAY ---
+    military_watchlist = {}
     try:
-        # Hitting the unrestricted global endpoint of ADSB.lol
-        adsb_url = "https://api.adsb.lol/v2/all"
-        headers = {"User-Agent": "AeroTrack-Global/1.0"}
-        
-        response = requests.get(adsb_url, headers=headers, timeout=15)
-        st.write("ADSB Status:", response.status_code)
-        st.write("ADSB Length:", len(response.text))
+        mil_url = "https://api.adsb.lol/v2/mil"
+
+        response = requests.get(
+            mil_url,
+            headers={"User-Agent": "AeroTrack-Global/1.0"},
+            timeout=15
+       )
+
+        st.write("ADSB-MIL Status:", response.status_code)
+
         if response.status_code == 200:
-            for ac in response.json().get("ac", []):
-                hex_code = str(ac.get("hex", "UNKN")).upper()
-                if hex_code == "UNKN" or ac.get("lat") is None: 
-                    continue
-                
-                raw_speed_knots = float(ac.get("gs", 0.0)) if ac.get("gs") is not None else 0.0
-                
-                # Native metadata extraction
-                tactical_callsign = str(ac.get("flight", "UNKN")).strip()
-                tactical_airframe = str(ac.get("t", "UNKN")).strip()
-                
-                tactical_grid[hex_code] = {
-                    "icao24": hex_code,
-                    "callsign": tactical_callsign,
-                    "latitude": float(ac.get("lat")),
-                    "longitude": float(ac.get("lon")) if ac.get("lon") is not None else 0.0,
-                    "baro_altitude": float(ac.get("alt_baro", 0.0)) if isinstance(ac.get("alt_baro"), (int, float)) else 0.0,
-                    "velocity": raw_speed_knots * 1.852, # Knots to km/h
-                    "heading": float(ac.get("track", 0.0)) if ac.get("track") is not None else 0.0,
-                    "vertical_rate": float(ac.get("baro_rate", 0.0)) if ac.get("baro_rate") is not None else 0.0,
-                    "military": True if ac.get("mil", False) else False, 
-                    "source": "ADSB.lol",
-                    
-                    # Pre-fill intelligence with tactical data
-                    "aircraft_type": tactical_airframe if tactical_airframe else "UNKN",
-                    "flight_number": tactical_callsign if tactical_callsign else "UNKN",
-                    "airline_code": "UNKN",
-                    "departure_iata": "UNKN"
-                }
+            military_aircraft = response.json().get("ac", [])
+
+            st.write("Military Aircraft:", len(military_aircraft))
+
+            for ac in military_aircraft:
+
+                hex_code = str(ac.get("hex", "")).upper()
+
+                if hex_code:
+
+                    military_watchlist[hex_code] = {
+                        "callsign": str(ac.get("flight", "")).strip(),
+                        "aircraft_type": str(ac.get("t", "")).strip()
+                   }
+
     except Exception as e:
-        st.warning(f"Tactical ADSB.lol Feed Offline: {e}")
+        st.warning(f"ADSB Military Feed Offline: {e}")
+
 
     # --- FEED 2: AIRLABS GLOBAL METADATA OVERLAY ---
+    
     try:
         airlabs_url = f"https://airlabs.co/api/v9/flights?api_key={api_key}"
         response = requests.get(airlabs_url, timeout=15)
 
         st.write("AirLabs Status:", response.status_code)
         st.write("AirLabs Length:", len(response.text))
+        aircraft_list = []
         if response.status_code == 200:
             aircraft_list = response.json().get("response", [])
 
@@ -122,9 +115,15 @@ def fetch_global_fusion(api_key):
                     "flight_number": str(ac.get("flight_iata", "UNKN")),
                     "airline_code": str(ac.get("airline_iata", "UNKN")),
                     "departure_iata": str(ac.get("dep_iata", "UNKN")),
-                    "military": False,
+                    "military": hex_code in military_watchlist,
                     "source": "AirLabs"
                 }
+                
+                if hex_code in military_watchlist:
+                    adsb_type = military_watchlist[hex_code]["aircraft_type"]
+
+                if adsb_type:
+                    tactical_grid[hex_code]["aircraft_type"] = adsb_type
 
             except Exception as aircraft_error:
                 st.write("Aircraft Parse Error:", aircraft_error)
@@ -159,8 +158,17 @@ def fetch_global_fusion(api_key):
             is_true_dash = (velocity > 1250) or (velocity > 1050 and altitude < 28000)
             is_malformed_hex = (icao24 != "UNKN" and len(icao24) != 6)
         
-            if is_low_alt_dash or is_ceiling_breach or is_true_dash or is_malformed_hex or is_military:
+            if is_military:
+                df.at[idx, "Classification"] = "Military Asset"
+
+            elif (
+                is_low_alt_dash
+                or is_ceiling_breach
+                or is_true_dash
+                or is_malformed_hex
+          ):
                 df.at[idx, "Classification"] = "Threat Alert"
+        
         except Exception:
             pass
     return df
@@ -212,7 +220,7 @@ else:
             "Classification": True
         },
         color="Classification",
-        color_discrete_map={"Standard Track": "#00ffff", "Threat Alert": "#ff0033"}, 
+        color_discrete_map={"Standard Track": "#00ffff", "Threat Alert": "#ff0033", "Military Asset": "#ffaa00"}, 
         size_max=12,
         zoom=1.5,
         height=700
