@@ -103,8 +103,8 @@ def fetch_global_fusion(api_key):
              hex_code == "UNKN"
              or ac.get("lat") is None
              or ac.get("lng") is None
-           ):
-        continue
+        ):
+             continue
 
         tactical_grid[hex_code] = {
             "icao24": hex_code,
