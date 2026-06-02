@@ -87,21 +87,18 @@ def fetch_global_fusion(api_key):
         st.warning(f"Tactical ADSB.lol Feed Offline: {e}")
 
     # --- FEED 2: AIRLABS GLOBAL METADATA OVERLAY ---
-try:
-    airlabs_url = f"https://airlabs.co/api/v9/flights?api_key={api_key}"
-    response = requests.get(airlabs_url, timeout=15)
+    try:
+        airlabs_url = f"https://airlabs.co/api/v9/flights?api_key={api_key}"
+        response = requests.get(airlabs_url, timeout=15)
 
-    st.write("AirLabs Status:", response.status_code)
-    st.write("AirLabs Length:", len(response.text))
-
-    if response.status_code == 200:
-
-        aircraft_list = response.json().get("response", [])
+        st.write("AirLabs Status:", response.status_code)
+        st.write("AirLabs Length:", len(response.text))
+        if response.status_code == 200:
+            aircraft_list = response.json().get("response", [])
 
         st.write("Aircraft received:", len(aircraft_list))
-
         for ac in aircraft_list:
-
+            
             try:
                 hex_code = str(ac.get("hex", "UNKN")).upper()
 
@@ -133,8 +130,8 @@ try:
                 st.write("Aircraft Parse Error:", aircraft_error)
                 continue
 
-except Exception as e:
-    st.error(f"AirLabs Error: {e}")
+    except Exception as e:
+        st.error(f"AirLabs Error: {e}")
 
     # --- DATAFRAME GENERATION & KINEMATICS ---
     st.write("Tracks collected:", len(tactical_grid))
@@ -155,21 +152,17 @@ except Exception as e:
             aircraft_type = str(row.get("aircraft_type", "UNKN")).upper().strip()
             icao24 = str(row.get("icao24", "UNKN")).upper().strip()
             is_military = row.get("military", False)
-            
+        
             is_low_alt_dash = (altitude < 15000 and velocity > 850)
             max_ceiling = 51000 if aircraft_type in biz_jets else 44000
             is_ceiling_breach = (altitude > max_ceiling)
             is_true_dash = (velocity > 1250) or (velocity > 1050 and altitude < 28000)
             is_malformed_hex = (icao24 != "UNKN" and len(icao24) != 6)
-            
+        
             if is_low_alt_dash or is_ceiling_breach or is_true_dash or is_malformed_hex or is_military:
                 df.at[idx, "Classification"] = "Threat Alert"
-                
         except Exception:
             pass
-
-
-            
     return df
 
 # =====================================================================
