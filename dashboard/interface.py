@@ -87,45 +87,54 @@ def fetch_global_fusion(api_key):
         st.warning(f"Tactical ADSB.lol Feed Offline: {e}")
 
     # --- FEED 2: AIRLABS GLOBAL METADATA OVERLAY ---
-    try:
-        airlabs_url = f"https://airlabs.co/api/v9/flights?api_key={api_key}"
-        response = requests.get(airlabs_url, timeout=15)
-        st.write("AirLabs Status:", response.status_code)
-        st.write("AirLabs Length:", len(response.text))
-        st.write(response.json()["response"][0])
-        
-if response.status_code == 200:
-    for ac in response.json().get("response", []):
-        try:
-            hex_code = str(ac.get("hex", "UNKN")).upper()
+try:
+    airlabs_url = f"https://airlabs.co/api/v9/flights?api_key={api_key}"
+    response = requests.get(airlabs_url, timeout=15)
 
-            if (
-                hex_code == "UNKN"
-                or ac.get("lat") is None
-                or ac.get("lng") is None
-            ):
+    st.write("AirLabs Status:", response.status_code)
+    st.write("AirLabs Length:", len(response.text))
+
+    if response.status_code == 200:
+
+        aircraft_list = response.json().get("response", [])
+
+        st.write("Aircraft received:", len(aircraft_list))
+
+        for ac in aircraft_list:
+
+            try:
+                hex_code = str(ac.get("hex", "UNKN")).upper()
+
+                if (
+                    hex_code == "UNKN"
+                    or ac.get("lat") is None
+                    or ac.get("lng") is None
+                ):
+                    continue
+
+                tactical_grid[hex_code] = {
+                    "icao24": hex_code,
+                    "callsign": str(ac.get("flight_iata", "UNKN")).strip(),
+                    "latitude": float(ac.get("lat") or 0),
+                    "longitude": float(ac.get("lng") or 0),
+                    "baro_altitude": float(ac.get("alt") or 0) * 3.28084,
+                    "velocity": float(ac.get("speed") or 0),
+                    "heading": float(ac.get("dir") or 0),
+                    "vertical_rate": float(ac.get("v_speed") or 0),
+                    "aircraft_type": str(ac.get("aircraft_icao", "UNKN")),
+                    "flight_number": str(ac.get("flight_iata", "UNKN")),
+                    "airline_code": str(ac.get("airline_iata", "UNKN")),
+                    "departure_iata": str(ac.get("dep_iata", "UNKN")),
+                    "military": False,
+                    "source": "AirLabs"
+                }
+
+            except Exception as aircraft_error:
+                st.write("Aircraft Parse Error:", aircraft_error)
                 continue
 
-            tactical_grid[hex_code] = {
-                "icao24": hex_code,
-                "callsign": str(ac.get("flight_iata", "UNKN")).strip(),
-                "latitude": float(ac.get("lat") or 0),
-                "longitude": float(ac.get("lng") or 0),
-                "baro_altitude": float(ac.get("alt") or 0) * 3.28084,
-                "velocity": float(ac.get("speed") or 0),
-                "heading": float(ac.get("dir") or 0),
-                "vertical_rate": float(ac.get("v_speed") or 0),
-                "aircraft_type": str(ac.get("aircraft_icao", "UNKN")),
-                "flight_number": str(ac.get("flight_iata", "UNKN")),
-                "airline_code": str(ac.get("airline_iata", "UNKN")),
-                "departure_iata": str(ac.get("dep_iata", "UNKN")),
-                "military": False,
-                "source": "AirLabs"
-            }
-
-        except Exception as aircraft_error:
-            st.write("Aircraft Parse Error:", aircraft_error)
-            continue
+except Exception as e:
+    st.error(f"AirLabs Error: {e}")
 
     # --- DATAFRAME GENERATION & KINEMATICS ---
     st.write("Tracks collected:", len(tactical_grid))
