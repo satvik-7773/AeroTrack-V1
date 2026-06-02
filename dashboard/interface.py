@@ -95,7 +95,7 @@ def fetch_global_fusion(api_key):
         st.write(response.json()["response"][0])
         
         if response.status_code == 200:
-            for ac in response.json().get("response", []):
+for ac in response.json().get("response", []):
     try:
         hex_code = str(ac.get("hex", "UNKN")).upper()
 
