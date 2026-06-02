@@ -1,6 +1,5 @@
 """
 AeroTrack-V1: High-Availability AirLabs Ingestion Node
-Author: Certified Python Developer
 """
 
 import os
@@ -20,68 +19,52 @@ class OpenSkyClient:
     def __init__(self):
         self.endpoint = "https://airlabs.co/api/v9/flights"
         
-        # Pull API key from Hugging Face environment variables or Streamlit secrets
-        if "AIRLABS_KEY" in os.environ:
-            self.api_key = os.environ.get("AIRLABS_API_KEY", "")
-        elif hasattr(sys, 'modules') and 'streamlit' in sys.modules:
+        # Pull API key from Streamlit secrets, strictly matching your secret name
+        try:
             import streamlit as st
-            self.api_key = st.secrets.get("AIRLABS_API_KEY", "")
-        else:
-            self.api_key = os.getenv("AIRLABS_KEY_API", "")
+            self.api_key = st.secrets["AIRLABS_API_KEY"]
+        except Exception:
+            self.api_key = os.getenv("AIRLABS_API_KEY", "")
         
     def poll_airspace_matrix(self):
         """Polls tracking telemetry using the cloud-allowed AirLabs engine."""
         if not self.api_key:
-            logging.error("CRITICAL: AIRLABS_KEY environment variable is missing!")
+            logging.error("CRITICAL: AIRLABS_API_KEY is missing from Secrets!")
             return None
             
-        params = {
-            "api_key": self.api_key
-        }
+        params = {"api_key": self.api_key}
         
         try:
-            logging.info("Initiating cloud-friendly telemetry pipe to AirLabs Engine...")
-            response = requests.get(self.endpoint, params=params, timeout=12)
-            if response.status_code == 200:
-                logging.info("AirLabs link established. Live telemetry streaming verified.")
-                return response.json()
-            logging.warning("AirLabs responded with unexpected status code: %d", response.status_code)
-        except Exception as error:
-            logging.error("Failed to connect to AirLabs data pipeline: %s", str(error))
-            
-        return None
+            logging.info("Initiating cloud-friendly telemetry pipe to AirLabs...")
+            response = requests.get(self.endpoint, params=params, timeout=15)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logging.error(f"AirLabs Pipe Failure: {e}")
+            return None
 
-    @staticmethod
-    def parse_state_vectors(payload):
-        """Parses the AirLabs dynamic JSON structure into the core AeroTrack telemetry matrix."""
-        if not payload or not isinstance(payload, dict) or "response" not in payload:
-            logging.warning("Received blank or invalid payload matrix array.")
+    def parse_state_vectors(self, payload):
+        """Standardizes AirLabs JSON to internal AeroTrack format."""
+        if not payload or "response" not in payload:
             return []
 
         parsed_records = []
-        import time
-        timestamp = int(time.time()) # Use current Unix epoch time
-        
         for ac in payload["response"]:
-            # Filter out entries missing crucial positional metrics
-            if "lat" not in ac or "lng" not in ac or ac["lat"] is None or ac["lng"] is None:
-                continue
-                
+            # Standardize records
             parsed_records.append({
-                "icao24": ac.get("hex", "UNKN"),
-                "callsign": ac.get("flight_number", ac.get("flight_icao", "UNKN")),
-                "origin_country": ac.get("flag", "Unknown"),
-                "aircraft_type": ac.get("aircraft_icao", "UNKN"),
-                "airline_code": ac.get("airline_iata", "UNKN"),
-                "flight_number": ac.get("flight_iata", "UNKN"),
-                "departure_iata": ac.get("dep_iata", "UNKN"),
-                "timestamp": timestamp,
-                "longitude": float(ac["lng"]),
-                "latitude": float(ac["lat"]),
-                "baro_altitude": float(ac.get("alt", 0.0)) * 3.28084, # Convert meters to feet if necessary
-                "velocity": float(ac.get("speed", 0.0)), # Ground speed in km/h or knots
-                "heading": float(ac.get("dir", 0.0)), # Direction track angle
-                "vertical_rate": float(ac.get("v_speed", 0.0)) # Vertical speed
+                "icao24": str(ac.get("hex", "UNKN")).upper(),
+                "callsign": str(ac.get("flight_iata", "UNKN")),
+                "aircraft_type": str(ac.get("aircraft_icao", "UNKN")),
+                "airline_code": str(ac.get("airline_iata", "UNKN")),
+                "flight_number": str(ac.get("flight_iata", "UNKN")),
+                "departure_iata": str(ac.get("dep_iata", "UNKN")),
+                "longitude": float(ac.get("lng", 0)),
+                "latitude": float(ac.get("lat", 0)),
+                "baro_altitude": float(ac.get("alt", 0)) * 3.28084,
+                "velocity": float(ac.get("speed", 0.0)),
+                "heading": float(ac.get("dir", 0.0)),
+                "vertical_rate": float(ac.get("v_speed", 0.0)),
+                "military": False,
+                "source": "AirLabs"
             })
-            
         return parsed_records
