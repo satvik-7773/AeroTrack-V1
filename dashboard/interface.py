@@ -36,51 +36,68 @@ st.markdown("""
 
 import concurrent.futures
 
+# =====================================================================
+# 1. CORE DATA INGESTION ENGINE (HIGH-DENSITY GRID STITCHING)
+# =====================================================================
 @st.cache_data(ttl=15)
 def fetch_global_unfiltered_airspace(airlabs_api_key):
     tactical_grid = {}
 
-    # --- THE TACTICAL STITCHING MATRIX ---
-    # We fire simultaneous radius requests at the world's most active corridors.
-    # Format: (Latitude, Longitude)
+    # --- THE 20 MEGA-HUB STRIKE MATRIX ---
+    # Firing simultaneous 250NM radius requests at the 20 densest airspaces on Earth
     strike_zones = [
-        (39.0, -75.0),  # Zone 1: US Eastern Seaboard (DC/NYC/NORAD)
-        (51.0, 10.0),   # Zone 2: Central Europe (Germany/NATO Hubs)
-        (33.0, 35.0),   # Zone 3: Middle East (Israel/Syria/Cyprus)
-        (23.5, 119.5),  # Zone 4: South China Sea (Taiwan Strait)
-        (34.0, -118.0), # Zone 5: US West Coast (SoCal/PACFLT)
-        (50.1, 22.0),   # Zone 6: Polish/Ukraine Border (ISR Loiter Zone)
-        (35.6, 139.6),  # Zone 7: Japan/East Asia
-        (25.0, 55.0)    # Zone 8: Persian Gulf (Dubai/Qatar)
+        (39.0, -75.0),  # US East Coast (DC/NYC)
+        (33.6, -84.4),  # US South (Atlanta - Hartsfield)
+        (41.9, -87.9),  # US Midwest (Chicago - O'Hare)
+        (32.9, -97.0),  # US Texas (Dallas/Fort Worth)
+        (34.0, -118.0), # US West Coast (SoCal/LAX)
+        (47.4, -122.3), # US Northwest (Seattle)
+        (51.5, -0.1),   # UK (London - Heathrow)
+        (48.8, 2.3),    # France (Paris - CDG)
+        (50.1, 8.5),    # Germany (Frankfurt)
+        (41.8, 12.5),   # Italy (Rome)
+        (25.2, 55.3),   # UAE (Dubai)
+        (28.6, 77.1),   # India (New Delhi)
+        (1.3, 103.8),   # Singapore (Changi)
+        (35.5, 139.7),  # Japan (Tokyo)
+        (37.5, 126.9),  # South Korea (Seoul)
+        (22.3, 113.9),  # Hong Kong / South China
+        (31.2, 121.4),  # China (Shanghai)
+        (-33.9, 151.1), # Australia (Sydney)
+        (-23.5, -46.6), # Brazil (Sao Paulo)
+        (50.1, 22.0)    # Poland/Ukraine Border (ISR Loiter Zone)
     ]
 
     def fetch_zone(coords):
         lat, lon = coords
-        # Using the unblocked, legal /point/ API with maximum 250NM radius
         url = f"https://api.airplanes.live/v2/point/{lat}/{lon}/250"
         try:
-            res = requests.get(url, headers={"User-Agent": "AxisDef-Stitcher/1.0"}, timeout=10)
+            # We use standard requests since the /point endpoint is legal and unblocked
+            res = requests.get(url, headers={"User-Agent": "AxisDef-Stitcher-V2/1.0"}, timeout=10)
             if res.status_code == 200:
                 return res.json().get("ac", [])
         except Exception:
             return []
         return []
 
-    # --- MULTI-THREADED EXECUTION ---
-    # Launch 8 simultaneous API calls to pull the global grid in parallel
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+    # --- MULTI-THREADED EXECUTION (20 WORKERS) ---
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
         zone_results = executor.map(fetch_zone, strike_zones)
 
-    # --- PARSE AND MERGE PAYLOADS ---
+    # --- PARSE AND MERGE PAYLOADS (WITH NATIVE METADATA EXTRACTION) ---
     for payload in zone_results:
         for ac in payload:
             hex_code = str(ac.get("hex", "UNKN")).upper()
             if hex_code == "UNKN": 
                 continue
             
-            # Deduplication: If overlapping zones caught the same plane, it just overwrites cleanly
             raw_speed_knots = float(ac.get("gs", 0.0)) if ac.get("gs") is not None else 0.0
             
+            # THE FIX: Extracting Aircraft Type ('t') directly from tactical radar
+            airframe_type = str(ac.get("t", "UNKN")).upper().strip()
+            if airframe_type == "": 
+                airframe_type = "UNKN"
+
             tactical_grid[hex_code] = {
                 "icao24": hex_code,
                 "callsign": str(ac.get("flight", "UNKN")).strip(),
@@ -91,8 +108,8 @@ def fetch_global_unfiltered_airspace(airlabs_api_key):
                 "heading": float(ac.get("track", 0.0)) if ac.get("track") is not None else 0.0,
                 "vertical_rate": float(ac.get("baro_rate", 0.0)) if ac.get("baro_rate") is not None else 0.0,
                 "military": True if ac.get("mil", False) else False, 
-                "source": "Airplanes.live (Stitched)", 
-                "aircraft_type": "UNKN",
+                "source": "Airplanes.live", 
+                "aircraft_type": airframe_type, # Massive reduction in UNKN fields
                 "flight_number": "UNKN",
                 "airline_code": "UNKN",
                 "departure_iata": "UNKN"
@@ -107,7 +124,7 @@ def fetch_global_unfiltered_airspace(airlabs_api_key):
             "aircraft_type", "flight_number", "airline_code", "departure_iata", "Classification"
         ])
 
-    # --- INGEST AIRLABS (GLOBAL METADATA MERGE) ---
+    # --- INGEST AIRLABS (METADATA MERGE OVERLAY) ---
     try:
         airlabs_url = f"https://airlabs.co/api/v9/flights?api_key={airlabs_api_key}"
         response = requests.get(airlabs_url, timeout=15)
@@ -115,12 +132,17 @@ def fetch_global_unfiltered_airspace(airlabs_api_key):
             for ac in response.json().get("response", []):
                 hex_code = str(ac.get("hex", "UNKN")).upper()
                 if hex_code in tactical_grid:
-                    tactical_grid[hex_code]["aircraft_type"] = ac.get("aircraft_icao", "UNKN")
+                    
+                    # Only overwrite the aircraft type if Airplanes.live missed it
+                    al_type = str(ac.get("aircraft_icao", "UNKN")).strip()
+                    if al_type != "UNKN" and tactical_grid[hex_code]["aircraft_type"] == "UNKN":
+                        tactical_grid[hex_code]["aircraft_type"] = al_type
+                        
                     tactical_grid[hex_code]["flight_number"] = ac.get("flight_iata", "UNKN")
                     tactical_grid[hex_code]["airline_code"] = ac.get("airline_iata", "UNKN")
                     tactical_grid[hex_code]["departure_iata"] = ac.get("dep_iata", "UNKN")
     except Exception as e:
-        st.warning(f"AirLabs Metadata Merge Failed. Tactical grid operating independently.")
+        st.warning(f"AirLabs Metadata Merge Warning: {e}")
 
     # --- SANITIZATION & DATAFRAME CREATION ---
     final_list = [t for t in tactical_grid.values() if t.get("latitude") is not None and t.get("longitude") is not None]
@@ -151,7 +173,6 @@ def fetch_global_unfiltered_airspace(airlabs_api_key):
             df_temp.at[idx, "Classification"] = "Standard Track"
             
     return df_temp
-
 # =====================================================================
 # APPLICATION HEADER & UI
 # =====================================================================
