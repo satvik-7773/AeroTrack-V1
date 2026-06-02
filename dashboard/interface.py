@@ -37,55 +37,37 @@ st.markdown("""
 # =====================================================================
 # 1. CORE DATA INGESTION ENGINE (GLOBAL BYPASS)
 # =====================================================================
+from curl_cffi import requests as stealth_requests # The new weapon
+
 @st.cache_data(ttl=15)
 def fetch_global_unfiltered_airspace(airlabs_api_key):
     tactical_grid = {}
+    payload = []
+    active_source = "UNKN"
 
-    # --- THE STEALTH BYPASS HEADERS ---
-    # Spoofing a complete Chrome AJAX payload to bypass Cloudflare WAF 403s
-    stealth_headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/javascript, */*; q=0.01",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate", 
-        "Connection": "keep-alive",
-        "X-Requested-With": "XMLHttpRequest",
-        "Sec-Fetch-Dest": "empty",
-        "Sec-Fetch-Mode": "cors",
-        "Sec-Fetch-Site": "same-origin"
-    }
-
-    # --- THE OSINT REDUNDANCY LOOP ---
-    # If one network locks down, instantly pivot to the next open-source radar
+    # --- THE OSINT REDUNDANCY LOOP (TLS IMPERSONATION) ---
     mirrors = [
         ("Airplanes.live", "https://globe.airplanes.live/data/aircraft.json"),
         ("ADSB.fi", "https://globe.adsb.fi/data/aircraft.json"),
         ("ADSB.lol", "https://globe.adsb.lol/data/aircraft.json")
     ]
 
-    active_source = "UNKN"
-    payload = []
-
     for source_name, url in mirrors:
         try:
-            # Dynamically spoof the Referer and Origin to match the target mirror
-            base_domain = "/".join(url.split("/")[:3]) + "/"
-            stealth_headers["Referer"] = base_domain
-            stealth_headers["Origin"] = base_domain[:-1]
+            # We no longer need massive header blocks. 
+            # impersonate="chrome110" fakes the TLS handshake perfectly at the network layer.
+            response = stealth_requests.get(url, impersonate="chrome110", timeout=15)
             
-            response = requests.get(url, headers=stealth_headers, timeout=12)
-            
-            # If we breach the firewall, grab the data and break the loop
             if response.status_code == 200:
                 payload = response.json().get("aircraft", [])
                 active_source = source_name
-                break 
+                break # Firewall breached, data acquired. Break the loop.
         except Exception:
-            continue # If connection drops or 403 hits, immediately try next mirror
+            continue # If a mirror is down, instantly pivot to the next
 
-    # Cold Start Safeguard if all networks are enforcing high security
+    # Cold Start Safeguard
     if not payload:
-        st.error("Global Radar Blocked: Cloudflare WAF actively repelled the connection on all OSINT mirrors. High security mode detected.")
+        st.error("Global Radar Blocked: Even with TLS spoofing, all mirrors dropped the connection. Verify your internet connection.")
         return pd.DataFrame(columns=[
             "icao24", "callsign", "latitude", "longitude", "baro_altitude", 
             "velocity", "heading", "vertical_rate", "military", "source",
@@ -111,7 +93,7 @@ def fetch_global_unfiltered_airspace(airlabs_api_key):
             "heading": float(ac.get("track", 0.0)) if ac.get("track") is not None else 0.0,
             "vertical_rate": float(ac.get("baro_rate", 0.0)) if ac.get("baro_rate") is not None else 0.0,
             "military": True if ac.get("mil", False) else False, 
-            "source": active_source, # Dynamically tracks which server survived the ping
+            "source": active_source, 
             "aircraft_type": "UNKN",
             "flight_number": "UNKN",
             "airline_code": "UNKN",
@@ -121,7 +103,8 @@ def fetch_global_unfiltered_airspace(airlabs_api_key):
     # --- INGEST AIRLABS (GLOBAL METADATA MERGE) ---
     try:
         airlabs_url = f"https://airlabs.co/api/v9/flights?api_key={airlabs_api_key}"
-        response = requests.get(airlabs_url, timeout=15)
+        # We can use stealth_requests here too, just to be safe
+        response = stealth_requests.get(airlabs_url, impersonate="chrome110", timeout=15)
         if response.status_code == 200:
             for ac in response.json().get("response", []):
                 hex_code = str(ac.get("hex", "UNKN")).upper()
@@ -131,8 +114,7 @@ def fetch_global_unfiltered_airspace(airlabs_api_key):
                     tactical_grid[hex_code]["airline_code"] = ac.get("airline_iata", "UNKN")
                     tactical_grid[hex_code]["departure_iata"] = ac.get("dep_iata", "UNKN")
     except Exception as e:
-        # Graceful degradation: If AirLabs fails, tactical coordinates still render
-        st.warning(f"AirLabs Metadata Merge Failed: {e}. Tactical grid will show UNKN for civil types.")
+        st.warning(f"AirLabs Metadata Merge Failed. Tactical grid operating independently.")
 
     # --- SANITIZATION & DATAFRAME CREATION ---
     final_list = [t for t in tactical_grid.values() if t.get("latitude") is not None and t.get("longitude") is not None]
