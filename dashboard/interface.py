@@ -92,6 +92,7 @@ def fetch_global_fusion(api_key):
         response = requests.get(airlabs_url, timeout=15)
         st.write("AirLabs Status:", response.status_code)
         st.write("AirLabs Length:", len(response.text))
+        st.write(response.json()["response"][0])
         
         if response.status_code == 200:
             for ac in response.json().get("response", []):
@@ -116,10 +117,10 @@ def fetch_global_fusion(api_key):
                         "callsign": str(ac.get("flight_iata", "UNKN")).strip(),
                         "latitude": float(ac.get("lat")),
                         "longitude": float(ac.get("lon")),
-                        "baro_altitude": float(ac.get("alt", 0)) * 3.28084,
-                        "velocity": float(ac.get("speed", 0.0)),
-                        "heading": float(ac.get("dir", 0.0)),
-                        "vertical_rate": float(ac.get("v_speed", 0.0)),
+                        "baro_altitude": float(ac.get("alt") or 0) * 3.28084,
+                        "velocity": float(ac.get("speed") or 0.0),
+                        "heading": float(ac.get("dir") or 0.0),
+                        "vertical_rate": float(ac.get("v_speed") or 0.0),
                         "aircraft_type": str(ac.get("aircraft_icao", "UNKN")),
                         "flight_number": str(ac.get("flight_iata", "UNKN")),
                         "airline_code": str(ac.get("airline_iata", "UNKN")),
