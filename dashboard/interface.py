@@ -39,72 +39,83 @@ st.markdown("""
 # =====================================================================
 from curl_cffi import requests as stealth_requests # The new weapon
 
+import concurrent.futures
+
 @st.cache_data(ttl=15)
 def fetch_global_unfiltered_airspace(airlabs_api_key):
     tactical_grid = {}
-    payload = []
-    active_source = "UNKN"
 
-    # --- THE OSINT REDUNDANCY LOOP (TLS IMPERSONATION) ---
-    mirrors = [
-        ("Airplanes.live", "https://globe.airplanes.live/data/aircraft.json"),
-        ("ADSB.fi", "https://globe.adsb.fi/data/aircraft.json"),
-        ("ADSB.lol", "https://globe.adsb.lol/data/aircraft.json")
+    # --- THE TACTICAL STITCHING MATRIX ---
+    # We fire simultaneous radius requests at the world's most active corridors.
+    # Format: (Latitude, Longitude)
+    strike_zones = [
+        (39.0, -75.0),  # Zone 1: US Eastern Seaboard (DC/NYC/NORAD)
+        (51.0, 10.0),   # Zone 2: Central Europe (Germany/NATO Hubs)
+        (33.0, 35.0),   # Zone 3: Middle East (Israel/Syria/Cyprus)
+        (23.5, 119.5),  # Zone 4: South China Sea (Taiwan Strait)
+        (34.0, -118.0), # Zone 5: US West Coast (SoCal/PACFLT)
+        (50.1, 22.0),   # Zone 6: Polish/Ukraine Border (ISR Loiter Zone)
+        (35.6, 139.6),  # Zone 7: Japan/East Asia
+        (25.0, 55.0)    # Zone 8: Persian Gulf (Dubai/Qatar)
     ]
 
-    for source_name, url in mirrors:
+    def fetch_zone(coords):
+        lat, lon = coords
+        # Using the unblocked, legal /point/ API with maximum 250NM radius
+        url = f"https://api.airplanes.live/v2/point/{lat}/{lon}/250"
         try:
-            # We no longer need massive header blocks. 
-            # impersonate="chrome110" fakes the TLS handshake perfectly at the network layer.
-            response = stealth_requests.get(url, impersonate="chrome110", timeout=15)
-            
-            if response.status_code == 200:
-                payload = response.json().get("aircraft", [])
-                active_source = source_name
-                break # Firewall breached, data acquired. Break the loop.
+            res = requests.get(url, headers={"User-Agent": "AxisDef-Stitcher/1.0"}, timeout=10)
+            if res.status_code == 200:
+                return res.json().get("ac", [])
         except Exception:
-            continue # If a mirror is down, instantly pivot to the next
+            return []
+        return []
+
+    # --- MULTI-THREADED EXECUTION ---
+    # Launch 8 simultaneous API calls to pull the global grid in parallel
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+        zone_results = executor.map(fetch_zone, strike_zones)
+
+    # --- PARSE AND MERGE PAYLOADS ---
+    for payload in zone_results:
+        for ac in payload:
+            hex_code = str(ac.get("hex", "UNKN")).upper()
+            if hex_code == "UNKN": 
+                continue
+            
+            # Deduplication: If overlapping zones caught the same plane, it just overwrites cleanly
+            raw_speed_knots = float(ac.get("gs", 0.0)) if ac.get("gs") is not None else 0.0
+            
+            tactical_grid[hex_code] = {
+                "icao24": hex_code,
+                "callsign": str(ac.get("flight", "UNKN")).strip(),
+                "latitude": ac.get("lat"),
+                "longitude": ac.get("lon"),
+                "baro_altitude": float(ac.get("alt_baro", 0.0)) if isinstance(ac.get("alt_baro"), (int, float)) else 0.0,
+                "velocity": raw_speed_knots * 1.852, 
+                "heading": float(ac.get("track", 0.0)) if ac.get("track") is not None else 0.0,
+                "vertical_rate": float(ac.get("baro_rate", 0.0)) if ac.get("baro_rate") is not None else 0.0,
+                "military": True if ac.get("mil", False) else False, 
+                "source": "Airplanes.live (Stitched)", 
+                "aircraft_type": "UNKN",
+                "flight_number": "UNKN",
+                "airline_code": "UNKN",
+                "departure_iata": "UNKN"
+            }
 
     # Cold Start Safeguard
-    if not payload:
-        st.error("Global Radar Blocked: Even with TLS spoofing, all mirrors dropped the connection. Verify your internet connection.")
+    if not tactical_grid:
+        st.error("Grid Stitching Failed. Check core internet connectivity.")
         return pd.DataFrame(columns=[
             "icao24", "callsign", "latitude", "longitude", "baro_altitude", 
             "velocity", "heading", "vertical_rate", "military", "source",
             "aircraft_type", "flight_number", "airline_code", "departure_iata", "Classification"
         ])
 
-    # --- PARSE THE RAW TACTICAL PAYLOAD ---
-    for ac in payload:
-        hex_code = str(ac.get("hex", "UNKN")).upper()
-        if hex_code == "UNKN": 
-            continue
-        
-        raw_speed_knots = float(ac.get("gs", 0.0)) if ac.get("gs") is not None else 0.0
-        speed_kmh = raw_speed_knots * 1.852 
-        
-        tactical_grid[hex_code] = {
-            "icao24": hex_code,
-            "callsign": str(ac.get("flight", "UNKN")).strip(),
-            "latitude": ac.get("lat"),
-            "longitude": ac.get("lon"),
-            "baro_altitude": float(ac.get("alt_baro", 0.0)) if isinstance(ac.get("alt_baro"), (int, float)) else 0.0,
-            "velocity": speed_kmh, 
-            "heading": float(ac.get("track", 0.0)) if ac.get("track") is not None else 0.0,
-            "vertical_rate": float(ac.get("baro_rate", 0.0)) if ac.get("baro_rate") is not None else 0.0,
-            "military": True if ac.get("mil", False) else False, 
-            "source": active_source, 
-            "aircraft_type": "UNKN",
-            "flight_number": "UNKN",
-            "airline_code": "UNKN",
-            "departure_iata": "UNKN"
-        }
-
     # --- INGEST AIRLABS (GLOBAL METADATA MERGE) ---
     try:
         airlabs_url = f"https://airlabs.co/api/v9/flights?api_key={airlabs_api_key}"
-        # We can use stealth_requests here too, just to be safe
-        response = stealth_requests.get(airlabs_url, impersonate="chrome110", timeout=15)
+        response = requests.get(airlabs_url, timeout=15)
         if response.status_code == 200:
             for ac in response.json().get("response", []):
                 hex_code = str(ac.get("hex", "UNKN")).upper()
@@ -118,14 +129,6 @@ def fetch_global_unfiltered_airspace(airlabs_api_key):
 
     # --- SANITIZATION & DATAFRAME CREATION ---
     final_list = [t for t in tactical_grid.values() if t.get("latitude") is not None and t.get("longitude") is not None]
-    
-    if not final_list:
-        return pd.DataFrame(columns=[
-            "icao24", "callsign", "latitude", "longitude", "baro_altitude", 
-            "velocity", "heading", "vertical_rate", "military", "source",
-            "aircraft_type", "flight_number", "airline_code", "departure_iata", "Classification"
-        ])
-        
     df_temp = pd.DataFrame(final_list)
     
     # --- KINEMATIC ANOMALY ENGINE ---
