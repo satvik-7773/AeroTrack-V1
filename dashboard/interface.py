@@ -12,9 +12,7 @@ from data_ingestion.client import OpenSkyClient
 client = OpenSkyClient()
 
 
-if not client.api_key:
-    st.error("🚨 CRITICAL: 'AIRLABS_API_KEY' not found in Streamlit Secrets.")
-    st.stop()
+
     
     
     page_title="AeroTrack-V1 // Global Tactical Monitor",
