@@ -51,6 +51,8 @@ def fetch_global_fusion(api_key):
         headers = {"User-Agent": "AeroTrack-Global/1.0"}
         
         response = requests.get(adsb_url, headers=headers, timeout=15)
+        st.write("ADSB Status:", response.status_code)
+        st.write("ADSB Length:", len(response.text))
         if response.status_code == 200:
             for ac in response.json().get("ac", []):
                 hex_code = str(ac.get("hex", "UNKN")).upper()
@@ -88,6 +90,8 @@ def fetch_global_fusion(api_key):
     try:
         airlabs_url = f"https://airlabs.co/api/v9/flights?api_key={api_key}"
         response = requests.get(airlabs_url, timeout=15)
+        st.write("AirLabs Status:", response.status_code)
+        st.write("AirLabs Length:", len(response.text))
         
         if response.status_code == 200:
             for ac in response.json().get("response", []):
@@ -124,9 +128,10 @@ def fetch_global_fusion(api_key):
                         "source": "AirLabs"
                     }
     except Exception as e:
-        pass 
+    st.error(f"AirLabs Error: {e}")
 
     # --- DATAFRAME GENERATION & KINEMATICS ---
+    st.write("Tracks collected:", len(tactical_grid))
     final_list = list(tactical_grid.values())
     if not final_list:
         return pd.DataFrame()
