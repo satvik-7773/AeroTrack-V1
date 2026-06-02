@@ -9,6 +9,12 @@ from pathlib import Path
 import time
 from data_ingestion.client import OpenSkyClient
 
+def safe_float(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
 
 
 st.set_page_config(
@@ -84,10 +90,10 @@ def fetch_global_fusion(api_key):
                     "callsign": str(ac.get("flight", "")).strip(),
                     "latitude": float(ac.get("lat") or 0),
                     "longitude": float(ac.get("lon") or 0),
-                    "baro_altitude": float(ac.get("alt_baro") or 0),
-                    "velocity": float(ac.get("gs") or 0) * 1.852,
-                    "heading": float(ac.get("track") or 0),
-                    "vertical_rate": float(ac.get("baro_rate") or 0),
+                    "baro_altitude": safe_float(ac.get("alt_baro")),
+                    "velocity": safe_float(ac.get("gs")) * 1.852,
+                    "heading": safe_float(ac.get("track")),
+                    "vertical_rate": safe_float(ac.get("baro_rate")),
                     "aircraft_type": str(ac.get("t", "")),
                     "military": True,
                     "source": "ADSB-MIL",
