@@ -34,11 +34,6 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# =====================================================================
-# 1. CORE DATA INGESTION ENGINE (GLOBAL BYPASS)
-# =====================================================================
-from curl_cffi import requests as stealth_requests # The new weapon
-
 import concurrent.futures
 
 @st.cache_data(ttl=15)
