@@ -1,41 +1,20 @@
-"""
-AeroTrack-V1: High-Availability AirLabs Ingestion Node
-"""
-
 import os
-import sys
 import logging
 import requests
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
+import streamlit as st
 
 class OpenSkyClient:
-    """Production data client routing through cloud-friendly AirLabs data stream."""
-    
     def __init__(self):
         self.endpoint = "https://airlabs.co/api/v9/flights"
-        
-        # Pull API key from Streamlit secrets, strictly matching your secret name
-        try:
-            import streamlit as st
-            self.api_key = st.secrets["AIRLABS_API_KEY"]
-        except Exception:
-            self.api_key = os.getenv("AIRLABS_API_KEY", "")
+        # Force the client to look at the exact secret name
+        self.api_key = st.secrets.get("AIRLABS_API_KEY", "")
         
     def poll_airspace_matrix(self):
-        """Polls tracking telemetry using the cloud-allowed AirLabs engine."""
         if not self.api_key:
             logging.error("CRITICAL: AIRLABS_API_KEY is missing from Secrets!")
             return None
-            
         params = {"api_key": self.api_key}
-        
         try:
-            logging.info("Initiating cloud-friendly telemetry pipe to AirLabs...")
             response = requests.get(self.endpoint, params=params, timeout=15)
             response.raise_for_status()
             return response.json()
@@ -44,14 +23,12 @@ class OpenSkyClient:
             return None
 
     def parse_state_vectors(self, payload):
-        """Standardizes AirLabs JSON to internal AeroTrack format."""
         if not payload or "response" not in payload:
             return []
-
-        parsed_records = []
+        parsed = []
         for ac in payload["response"]:
-            # Standardize records
-            parsed_records.append({
+            if ac.get("lat") is None or ac.get("lng") is None: continue
+            parsed.append({
                 "icao24": str(ac.get("hex", "UNKN")).upper(),
                 "callsign": str(ac.get("flight_iata", "UNKN")),
                 "aircraft_type": str(ac.get("aircraft_icao", "UNKN")),
@@ -67,4 +44,4 @@ class OpenSkyClient:
                 "military": False,
                 "source": "AirLabs"
             })
-        return parsed_records
+        return parsed
