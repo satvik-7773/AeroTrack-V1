@@ -11,15 +11,12 @@ from data_ingestion.client import OpenSkyClient
 
 client = OpenSkyClient()
 
-
-
-    
-    
-    page_title="AeroTrack-V1 // Global Tactical Monitor",
+st.set_page_config(
+    page_title="AeroTrack-V1 // Airspace Monitor",
     page_icon="🛰️",
     layout="wide",
     initial_sidebar_state="expanded"
-
+)
 
 st.markdown("""
     <style>
