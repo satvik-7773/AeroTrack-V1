@@ -22,12 +22,12 @@ class OpenSkyClient:
         
         # Pull API key from Hugging Face environment variables or Streamlit secrets
         if "AIRLABS_KEY" in os.environ:
-            self.api_key = os.environ.get("AIRLABS_KEY", "")
+            self.api_key = os.environ.get("AIRLABS_API_KEY", "")
         elif hasattr(sys, 'modules') and 'streamlit' in sys.modules:
             import streamlit as st
-            self.api_key = st.secrets.get("AIRLABS_KEY", "")
+            self.api_key = st.secrets.get("AIRLABS_API_KEY", "")
         else:
-            self.api_key = os.getenv("AIRLABS_KEY", "")
+            self.api_key = os.getenv("AIRLABS_KEY_API", "")
         
     def poll_airspace_matrix(self):
         """Polls tracking telemetry using the cloud-allowed AirLabs engine."""
