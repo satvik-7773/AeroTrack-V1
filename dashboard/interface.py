@@ -43,9 +43,11 @@ except Exception as e:
 @st.cache_data(ttl=15)
 def fetch_global_fusion(api_key):
     tactical_grid = {}
-
+    
    # --- FEED 1: ADSB.LOL MILITARY OVERLAY ---
     military_watchlist = {}
+    military_tracks = []
+
     try:
         mil_url = "https://api.adsb.lol/v2/mil"
 
@@ -69,25 +71,28 @@ def fetch_global_fusion(api_key):
 
                 hex_code = str(ac.get("hex", "")).upper().strip()
 
-                if hex_code:
+                if not hex_code:
+                    continue
 
-                    military_watchlist[hex_code] = {
-                        "callsign": str(ac.get("flight", "")).strip(),
-                        "aircraft_type": str(ac.get("t", "")).strip()
-                   }
-                
+                military_watchlist[hex_code] = {
+                    "callsign": str(ac.get("flight", "")).strip(),
+                    "aircraft_type": str(ac.get("t", "")).strip()
+               }
 
-                for ac in military_aircraft:
-                    military_tracks.append({
-                        "icao24": str(ac.get("hex", "")).upper(),
-                        "callsign": str(ac.get("flight", "")).strip(),
-                        "latitude": float(ac.get("lat") or 0),
-                        "longitude": float(ac.get("lon") or 0),
-                        "aircraft_type": str(ac.get("t", "")),
-                        "military": True,
-                        "source": "ADSB-MIL",
-                        "Classification": "Military Asset"
-          })
+                military_tracks.append({
+                    "icao24": hex_code,
+                    "callsign": str(ac.get("flight", "")).strip(),
+                    "latitude": float(ac.get("lat") or 0),
+                    "longitude": float(ac.get("lon") or 0),
+                    "baro_altitude": float(ac.get("alt_baro") or 0),
+                    "velocity": float(ac.get("gs") or 0) * 1.852,
+                    "heading": float(ac.get("track") or 0),
+                    "vertical_rate": float(ac.get("baro_rate") or 0),
+                    "aircraft_type": str(ac.get("t", "")),
+                    "military": True,
+                    "source": "ADSB-MIL",
+                    "Classification": "Military Asset"
+           })
     except Exception as e:
         st.warning(f"ADSB Military Feed Offline: {e}")
 
@@ -130,7 +135,7 @@ def fetch_global_fusion(api_key):
                     "flight_number": str(ac.get("flight_iata", "UNKN")),
                     "airline_code": str(ac.get("airline_iata", "UNKN")),
                     "departure_iata": str(ac.get("dep_iata", "UNKN")),
-                    
+                    "military": False,
                     "source": "AirLabs"
                 }
                 
@@ -143,7 +148,7 @@ def fetch_global_fusion(api_key):
 
                     if adsb_type:
                         tactical_grid[hex_code]["aircraft_type"] = adsb_type
-                mil_matches = 0
+                
 
                        
             
@@ -162,7 +167,7 @@ def fetch_global_fusion(api_key):
     st.write("Military Overlap:", len(intersection))
     st.write("ADSB Military Count:", len(adsb_hexes))
     st.write("AirLabs Count:", len(airlabs_hexes))
-    st.write("Military Overlap:", len(intersection))
+    
 
     # --- DATAFRAME GENERATION & KINEMATICS ---
     st.write("Tracks collected:", len(tactical_grid))
@@ -172,12 +177,25 @@ def fetch_global_fusion(api_key):
         
     df = pd.DataFrame(final_list)
     mil_df = pd.DataFrame(military_tracks)
+    
+    if not mil_df.empty:
+        mil_df = mil_df[
+            ~mil_df["icao24"].isin(df["icao24"])
+       ]
+
 
     if not mil_df.empty:
+        st.write("Military Tracks Built:", len(military_tracks))
         df = pd.concat([df, mil_df], ignore_index=True)
+        st.write("AirLabs Tracks:", len(final_list))
+        st.write("Military Tracks:", len(mil_df))
+        st.write("Combined Tracks:", len(df))
     
     # Stable Kinematics
-    df["Classification"] = "Standard Track"
+    if "Classification" not in df.columns:
+        df["Classification"] = "Standard Track"
+    else:
+        df["Classification"] = df["Classification"].fillna("Standard Track")
     biz_jets = ["GLEX", "GLF4", "GLF5", "GLF6", "CL30", "CL60", "F900", "FA7X", "C750", "E55P", "C56X", "C25A", "LJ60"]
     
     for idx, row in df.iterrows():
