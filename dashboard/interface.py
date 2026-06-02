@@ -33,7 +33,13 @@ st.markdown("""
 # =====================================================================
 # 1. CORE DATA INGESTION ENGINE (ADSB.LOL FUSION)
 # =====================================================================
-client = OpenSkyClient()
+
+try:
+    client = OpenSkyClient()
+except Exception as e:
+    st.error(f"OpenSky initialization failed: {e}")
+    st.stop()
+
 @st.cache_data(ttl=15)
 def fetch_global_fusion(api_key):
     tactical_grid = {}
