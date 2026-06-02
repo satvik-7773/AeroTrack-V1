@@ -9,7 +9,7 @@ from pathlib import Path
 import time
 from data_ingestion.client import OpenSkyClient
 
-client = OpenSkyClient()
+
 
 st.set_page_config(
     page_title="AeroTrack-V1 // Airspace Monitor",
@@ -33,6 +33,7 @@ st.markdown("""
 # =====================================================================
 # 1. CORE DATA INGESTION ENGINE (ADSB.LOL FUSION)
 # =====================================================================
+client = OpenSkyClient()
 @st.cache_data(ttl=15)
 def fetch_global_fusion(api_key):
     tactical_grid = {}
@@ -149,6 +150,8 @@ def fetch_global_fusion(api_key):
                 
         except Exception:
             pass
+)
+            
             
     return df
 
