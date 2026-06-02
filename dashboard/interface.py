@@ -43,6 +43,7 @@ def fetch_global_fusion(api_key):
         # Hitting the unrestricted global endpoint of ADSB.lol
         adsb_url = "https://api.adsb.lol/v2/all"
         headers = {"User-Agent": "AeroTrack-Global/1.0"}
+        st.write("ADSB aircraft:", len(tactical_grid))
         
         response = requests.get(adsb_url, headers=headers, timeout=15)
         if response.status_code == 200:
@@ -82,6 +83,8 @@ def fetch_global_fusion(api_key):
     try:
         airlabs_url = f"https://airlabs.co/api/v9/flights?api_key={api_key}"
         response = requests.get(airlabs_url, timeout=15)
+        st.write("Final aircraft:", len(tactical_grid))
+        st.write(response.json())
         
         if response.status_code == 200:
             for ac in response.json().get("response", []):
@@ -150,7 +153,7 @@ def fetch_global_fusion(api_key):
                 
         except Exception:
             pass
-)
+
             
             
     return df
