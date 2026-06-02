@@ -17,7 +17,7 @@ if not client.api_key:
     page_icon="🛰️",
     layout="wide",
     initial_sidebar_state="expanded"
-)
+
 
 st.markdown("""
     <style>
