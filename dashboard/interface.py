@@ -4,7 +4,6 @@ import requests
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import time
 
 # Dynamically append the project root directory to the Python tracking path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -12,10 +11,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # =====================================================================
 # CONFIGURATION
 # =====================================================================
-# Insert your AirLabs API Key here (or use st.secrets["AIRLABS_API_KEY"])
-AIRLABS_API_KEY = "4968fc59-348d-4a8a-af4f-73861d867e4e"
+AIRLABS_API_KEY = "YOUR_AIRLABS_API_KEY_HERE"
 
-# Page configuration for tactical full-width dark-mode radar grid
 st.set_page_config(
     page_title="AeroTrack-V1 // Airspace Monitor",
     page_icon="🛰️",
@@ -23,7 +20,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom Dark Combat Information Center CSS styling
 st.markdown("""
     <style>
     .main { background-color: #0b0e14; color: #ffffff; }
@@ -41,24 +37,18 @@ st.markdown("""
 # =====================================================================
 @st.cache_data(ttl=15)
 def fetch_global_unfiltered_airspace(airlabs_api_key):
-    """Pulls unfiltered global telemetry by bypassing the API and scraping the raw map state."""
     tactical_grid = {}
 
-    # --- INGEST ADSB.FI (THE RAW MAP BYPASS) ---
+    # --- INGEST AIRPLANES.LIVE (THE NEW OPEN GLOBAL FEED) ---
     try:
-        # Bypassing the restricted API and hitting the raw dump1090 state file
-        adsb_url = "https://adsb.fi/data/aircraft.json"
+        # Airplanes.live provides the exact same tar1090/readsb architecture but remains fully open
+        adsb_url = "https://api.airplanes.live/v2/all"
+        headers = {"User-Agent": "AxisDef-AeroTrack-Global/1.0"}
         
-        # Spoofing a standard Chrome browser so their server doesn't block the Python request
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
-            "Accept": "application/json"
-        }
         response = requests.get(adsb_url, headers=headers, timeout=15)
         response.raise_for_status()
         
-        # The map JSON uses the 'aircraft' array instead of 'ac'
-        for ac in response.json().get("aircraft", []):
+        for ac in response.json().get("ac", []):
             hex_code = str(ac.get("hex", "UNKN")).upper()
             if hex_code == "UNKN": 
                 continue
@@ -75,8 +65,8 @@ def fetch_global_unfiltered_airspace(airlabs_api_key):
                 "velocity": speed_kmh, 
                 "heading": float(ac.get("track", 0.0)) if ac.get("track") is not None else 0.0,
                 "vertical_rate": float(ac.get("baro_rate", 0.0)) if ac.get("baro_rate") is not None else 0.0,
-                "military": ac.get("mil", False), 
-                "source": "ADSB.fi"
+                "military": ac.get("mlat", False) or ac.get("mil", False),
+                "source": "Airplanes.live"
             }
     except Exception as e:
         st.error(f"Tactical Global Feed Error: {e}")
@@ -129,7 +119,7 @@ def fetch_global_unfiltered_airspace(airlabs_api_key):
         
     df_temp = pd.DataFrame(final_list)
     
-    # --- KINEMATIC ANOMALY & PHYSICS ENFORCEMENT ENGINE ---
+    # --- KINEMATIC ANOMALY ENGINE ---
     df_temp["Classification"] = "Standard Track"
     biz_jets = ["GLEX", "GLF4", "GLF5", "GLF6", "CL30", "CL60", "F900", "FA7X", "C750"]
     
@@ -154,6 +144,7 @@ def fetch_global_unfiltered_airspace(airlabs_api_key):
             df_temp.at[idx, "Classification"] = "Standard Track"
             
     return df_temp
+
 # =====================================================================
 # APPLICATION HEADER & UI
 # =====================================================================
@@ -161,17 +152,15 @@ st.title("🛰️ AeroTrack-V1 // Map Aircraft Anomalies in the Airspace")
 st.caption("Real-Time Global Aircraft Anomaly Detection • Possible Threat Detection")
 st.divider()
 
-# --- SIDEBAR CONTROLLER ---
 st.sidebar.header("Global Airspace Map")
 st.sidebar.markdown("Execute the 'Refresh The Aircraft Coordinates' command to perform a radar sweep")
 st.sidebar.info("💡 Map Refresh Requests are processed locally. Global payloads pull 15k+ targets.")
 
-# --- SCAN TRIGGER CONTROLLER ---
-if st.button("📡 Refresh The Aircraft Coordinates", use_container_width=True):
+# UPDATED: Replaced use_container_width with width="stretch"
+if st.button("📡 Refresh The Aircraft Coordinates", width="stretch"):
     st.cache_data.clear()
     st.toast("Global radar sweep dispatched!", icon="🚀")
 
-# Ingest and process telemetry matrix
 with st.spinner("Synchronizing global unfiltered aircraft positions...."):
     df = fetch_global_unfiltered_airspace(AIRLABS_API_KEY)
 
@@ -179,7 +168,6 @@ with st.spinner("Synchronizing global unfiltered aircraft positions...."):
 if df.empty:
     st.warning("⚠️ Warning: No active tracking streams detected. Retry...")
 else:
-    # Top-Level Fleet Metrics
     total_targets = len(df)
     threat_count = len(df[df["Classification"] == "Threat Alert"])
     
@@ -189,7 +177,6 @@ else:
     m3.metric(label="System Status", value="LIVE🔴")
     st.write("")
 
-    # SECTION 1: Full-Width Tactical Tracking Map
     st.subheader("🌐 Real-Time Global Airspace Mapping")
     
     fig = px.scatter_mapbox(
@@ -204,8 +191,8 @@ else:
             "departure_iata": True,
             "baro_altitude": True, 
             "velocity": True,
-            "military": True,  # New data point added to map
-            "source": True,    # New data point added to map
+            "military": True,
+            "source": True,
             "Classification": True
         },
         color="Classification",
@@ -231,31 +218,28 @@ else:
         )
     )
     
-    st.plotly_chart(fig, use_container_width=True)
+    # UPDATED: Replaced use_container_width with width="stretch"
+    st.plotly_chart(fig, width="stretch")
 
-    # --- AIRBORNE LOG MATRIX (TABLE UI) ---
     st.divider()
     st.subheader("Active Airspace Intelligence Log")
     
-    # 1. Select only the most relevant columns for the tactical display
     display_columns = [
         "Classification", 
         "flight_number",
         "airline_code",
         "aircraft_type",
         "departure_iata",
-        "military",       # Added to table for quick tactical reference
+        "military",       
         "baro_altitude", 
         "velocity", 
         "heading", 
         "icao24"
     ]
     
-    # Check if the columns exist (safeguard for cold starts)
     available_cols = [col for col in display_columns if col in df.columns]
     df_display = df[available_cols].copy()
     
-    # 2. Rename the backend keys into professional UI headers
     df_display = df_display.rename(columns={
         "Classification": "Threat Status",
         "flight_number": "Flight No.",
@@ -269,14 +253,12 @@ else:
         "icao24": "Transponder Hex"
     })
     
-    # 3. Sort the matrix to bubble Threat Alerts to the absolute top
     if "Threat Status" in df_display.columns:
-        # Create a custom sorting index (Threats get a 0, Standards get a 1)
         df_display["_sort_rank"] = df_display["Threat Status"].apply(lambda x: 0 if x == "Threat Alert" else 1)
         df_display = df_display.sort_values(by=["_sort_rank", "Altitude (ft)"], ascending=[True, False])
         df_display = df_display.drop(columns=["_sort_rank"])
 
-    # 4. Render the final matrix in full width
-    st.dataframe(df_display, use_container_width=True, hide_index=True)
+    # UPDATED: Replaced use_container_width with width="stretch"
+    st.dataframe(df_display, width="stretch", hide_index=True)
 
-st.markdown("--- *Real-Time Airspace Telemetry by AirLabs & ADSB.fi • Designed & Built by - Satvik (satvik-7773)*")
+st.markdown("--- *Real-Time Airspace Telemetry by AirLabs & Airplanes.live • Designed & Built by - Satvik (satvik-7773)*")
