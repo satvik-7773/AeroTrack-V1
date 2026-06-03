@@ -8,6 +8,15 @@ import plotly.express as px
 from pathlib import Path
 import time
 from data_ingestion.client import OpenSkyClient
+from supabase import create_client
+
+SUPABASE_URL = st.secrets["SUPABASE_URL"]
+SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+
+supabase = create_client(
+    SUPABASE_URL,
+    SUPABASE_KEY
+)
 
 def safe_float(value, default=0.0):
     try:
