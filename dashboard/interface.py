@@ -200,8 +200,7 @@ def fetch_global_fusion(api_key):
     biz_jets = ["GLEX", "GLF4", "GLF5", "GLF6", "CL30", "CL60", "F900", "FA7X", "C750", "E55P", "C56X", "C25A", "LJ60"]
     
     df["Threat_Reason"] = "None"
-    if reasons:
-        df.at[idx, "Threat_Reason"] = ", ".join(reasons)
+   
     
     for idx, row in df.iterrows():
         try:
@@ -235,9 +234,14 @@ def fetch_global_fusion(api_key):
                 reasons.append("Military Asset")
 
             if altitude > 60000 and velocity < 10:
-                reasons.append("Telemetry Anomaly")    
+                reasons.append("Telemetry Anomaly")
 
-            df.at[idx, "Threat_Reason"] = ", ".join(reasons)
+            if altitude < 100 and velocity > 1500:
+                reasons.append("Ground-Level Hypersonic Velocity")        
+
+            if reasons:
+                df.at[idx, "Threat_Reason"] = ", ".join(reasons)
+
             if is_military:
                 df.at[idx, "Classification"] = "Military Asset"
 
