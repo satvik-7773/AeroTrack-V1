@@ -7,3 +7,4 @@ joblib
 streamlit
 plotly
 curl-cffi
+supabase
