@@ -236,19 +236,21 @@ st.caption("Unrestricted Global Radar Fusion (ADSB.lol + AirLabs Intelligence)")
 st.divider()
 
 st.sidebar.header("Command Center Controls")
-st.sidebar.markdown("Execute the 'Global Fusion Sweep' to pull the entire planet.")
 
-if st.sidebar.button("📡 Execute Global Fusion Sweep", width="stretch"):
-    st.cache_data.clear()
-    st.toast("Executing full planetary sweep...", icon="🌍")
-
-with st.spinner("Stitching 15,000+ global tactical tracks with commercial metadata..."):
-    df = fetch_global_fusion(client.api_key)
 
 # --- GRAPHICS RENDERING LAYER ---
 if df.empty:
     st.warning("⚠️ Warning: No active tracking streams detected. Check network connections or API Quota.")
 else:
+    st.markdown("Execute the 'Global Fusion Sweep' to pull the entire planet.")
+
+    if st.button("📡 Execute Global Fusion Sweep", width="stretch"):
+    st.cache_data.clear()
+    st.toast("Executing full planetary sweep...", icon="🌍")
+
+    with st.spinner("Stitching 15,000+ global tactical tracks with commercial metadata..."):
+    df = fetch_global_fusion(client.api_key)
+
     total_targets = len(df)
     threat_count = len(df[df["Classification"] == "Threat Alert"])
     mil_count = len(df[df["military"] == True])
