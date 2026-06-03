@@ -17,6 +17,18 @@ supabase = create_client(
     SUPABASE_URL,
     SUPABASE_KEY
 )
+try:
+    result = (
+        supabase.table("anomaly_history")
+        .select("*")
+        .limit(1)
+        .execute()
+    )
+
+    st.sidebar.success("Supabase Connected")
+
+except Exception as e:
+    st.sidebar.error(f"Supabase Error: {e}")
 
 def safe_float(value, default=0.0):
     try:
