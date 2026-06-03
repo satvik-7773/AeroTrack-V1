@@ -258,7 +258,10 @@ def fetch_global_fusion(api_key):
                 reasons.append("Telemetry Anomaly")
 
             if altitude < 100 and velocity > 1500:
-                reasons.append("Ground-Level Hypersonic Velocity")        
+                reasons.append("Ground-Level Hypersonic Velocity")
+
+            if altitude > 100000:
+                reasons.append("Extreme Altitude")            
 
             if reasons:
                 df.at[idx, "Threat_Reason"] = ", ".join(reasons)
@@ -272,6 +275,35 @@ def fetch_global_fusion(api_key):
         
         except Exception:
             pass
+
+    flagged_df = df[
+        df["Classification"] != "Standard Track"
+    ]
+    for _, row in flagged_df.iterrows():
+            
+        try:
+            supabase.table(
+            "anomaly_history"
+            ).insert({
+
+                "icao24": str(row.get("icao24", "")),
+                "callsign": str(row.get("callsign", "")),
+
+                "classification": str(row.get("Classification", "")),
+                "threat_reason": str(row.get("Threat_Reason", "")),
+
+                "aircraft_type": str(row.get("aircraft_type", "")),
+ 
+                "altitude": float(row.get("baro_altitude", 0)),
+                "velocity": float(row.get("velocity", 0)),
+
+                "source": str(row.get("source", ""))
+
+            }).execute()
+
+        except Exception as e:
+            st.write("DB Insert Error:", e)
+
     return df
 
 # =====================================================================
