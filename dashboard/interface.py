@@ -199,7 +199,9 @@ def fetch_global_fusion(api_key):
         df["Classification"] = df["Classification"].fillna("Standard Track")
     biz_jets = ["GLEX", "GLF4", "GLF5", "GLF6", "CL30", "CL60", "F900", "FA7X", "C750", "E55P", "C56X", "C25A", "LJ60"]
     
-    df["Threat_Reason"] = ""
+    df["Threat_Reason"] = "None"
+    if reasons:
+        df.at[idx, "Threat_Reason"] = ", ".join(reasons)
     
     for idx, row in df.iterrows():
         try:
