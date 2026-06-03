@@ -199,6 +199,8 @@ def fetch_global_fusion(api_key):
         df["Classification"] = df["Classification"].fillna("Standard Track")
     biz_jets = ["GLEX", "GLF4", "GLF5", "GLF6", "CL30", "CL60", "F900", "FA7X", "C750", "E55P", "C56X", "C25A", "LJ60"]
     
+    df["Threat_Reason"] = ""
+    
     for idx, row in df.iterrows():
         try:
             velocity = float(row.get("velocity", 0.0))
@@ -213,16 +215,33 @@ def fetch_global_fusion(api_key):
             is_true_dash = (velocity > 1250) or (velocity > 1050 and altitude < 28000)
             is_malformed_hex = (icao24 != "UNKN" and len(icao24) != 6)
         
+            reasons = []
+
+            if is_low_alt_dash:
+                reasons.append("Low Altitude High Velocity")
+
+            if is_ceiling_breach:
+                reasons.append("Altitude Ceiling Breach")
+
+            if is_true_dash:
+                reasons.append("Excessive Velocity")
+
+            if is_malformed_hex:
+                reasons.append("Malformed ICAO")
+
+            if is_military:
+                reasons.append("Military Asset")
+
+            if altitude > 60000 and velocity < 10:
+                reasons.append("Telemetry Anomaly")    
+
+            df.at[idx, "Threat_Reason"] = ", ".join(reasons)
             if is_military:
                 df.at[idx, "Classification"] = "Military Asset"
 
-            elif (
-                is_low_alt_dash
-                or is_ceiling_breach
-                or is_true_dash
-                or is_malformed_hex
-          ):
-                df.at[idx, "Classification"] = "Threat Alert"
+            elif len(reasons) > 0:
+                df.at[idx, "Classification"] = "Threat Alert"    
+        
         
         except Exception:
             pass
@@ -305,7 +324,8 @@ else:
     st.subheader("Active Airspace Intelligence Log")
     
     display_columns = [
-        "Classification", 
+        "Classification",
+        "Threat_Reason", 
         "flight_number",
         "aircraft_type",
         "departure_iata",
@@ -321,6 +341,7 @@ else:
     
     df_display = df_display.rename(columns={
         "Classification": "Threat Status",
+        "Threat_Reason": "Reason",
         "flight_number": "Flight No.",
         "aircraft_type": "Airframe",
         "departure_iata": "Origin",
