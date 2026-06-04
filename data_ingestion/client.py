@@ -7,7 +7,7 @@ class OpenSkyClient:
     def __init__(self):
         self.endpoint = "https://airlabs.co/api/v9/flights"
         # Force the client to look at the exact secret name
-        self.api_key = st.secrets.get("AIRLABS_API_KEY", "")
+        self.api_key = os.getenv("AIRLABS_API_KEY",st.secrets.get("AIRLABS_API_KEY",""))
         
     def poll_airspace_matrix(self):
         if not self.api_key:
