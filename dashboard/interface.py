@@ -393,8 +393,8 @@ def fetch_global_fusion(api_key):
                     "aircraft_type":
                         str(row.get("aircraft_type", "")),
 
-                    "latitude": float(row.get("latitude", 0)),
-                    "longitude": float(row.get("longitude", 0)),
+                    "last_latitude": float(row.get("latitude", 0)),
+                    "last_longitude": float(row.get("longitude", 0)),
 
                 }).execute()
 
