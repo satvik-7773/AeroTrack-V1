@@ -261,7 +261,10 @@ def fetch_global_fusion(api_key):
                 reasons.append("Ground-Level Hypersonic Velocity")
 
             if altitude > 100000:
-                reasons.append("Extreme Altitude")            
+                reasons.append("Extreme Altitude")
+
+            if (altitude > 10000 and velocity < 20) or (altitude > 50000 and velocity < 100):
+                reasons.append("Airborne Velocity Anomaly")                
 
             if reasons:
                 df.at[idx, "Threat_Reason"] = ", ".join(reasons)
@@ -276,9 +279,7 @@ def fetch_global_fusion(api_key):
         except Exception:
             pass
 
-    flagged_df = df[
-        df["Classification"] != "Standard Track"
-    ]
+    flagged_df = df[(df["military"] == True) &( df["Threat_Reason"] != "Military Asset")]
     for _, row in flagged_df.iterrows():
             
         try:
@@ -303,7 +304,98 @@ def fetch_global_fusion(api_key):
 
         except Exception as e:
             st.write("DB Insert Error:", e)
+        
+        try:
 
+            icao = str(
+                row.get("icao24", "")
+            ).upper().strip()
+
+            existing = (
+                supabase.table("aircraft_tracking")
+                .select("*")
+                .eq("icao24", icao)
+                .execute()
+            )
+
+            if existing.data:
+
+                record = existing.data[0]
+
+                current_sightings = record["sightings"]
+
+                last_seen = pd.to_datetime(
+                    record["last_seen"]
+                )
+
+                now = pd.Timestamp.utcnow()
+
+                increment = (
+                    (now - last_seen)
+                    .total_seconds() > 300
+                )
+
+                update_data = {
+
+                    "last_seen":
+                        now.isoformat(),
+
+                    "latest_classification":
+                        str(row.get("Classification", "")),
+
+                    "latest_reason":
+                        str(row.get("Threat_Reason", ""))
+
+                }
+
+                if increment:
+
+                    update_data["sightings"] = (
+                        current_sightings + 1
+                    )
+
+                supabase.table(
+                    "aircraft_tracking"
+                ).update(
+                    update_data
+                ).eq(
+                    "icao24",
+                    icao
+                ).execute()
+
+            else:
+
+                now = pd.Timestamp.utcnow().isoformat()
+
+                supabase.table(
+                    "aircraft_tracking"
+                ).insert({
+
+                    "icao24": icao,
+
+                    "first_seen": now,
+                    "last_seen": now,
+
+                    "sightings": 1,
+
+                    "latest_classification":
+                        str(row.get("Classification", "")),
+
+                    "latest_reason":
+                        str(row.get("Threat_Reason", "")),
+
+                    "aircraft_type":
+                        str(row.get("aircraft_type", ""))
+
+                }).execute()
+
+        except Exception as e:
+
+            st.write(
+                "Tracking Error:",
+                e
+            )
+                
     return df
 
 # =====================================================================
@@ -405,7 +497,7 @@ else:
         "aircraft_type": "Airframe",
         "departure_iata": "Origin",
         "military": "Mil Asset",
-        "baro_altitude": "Alt (ft)",
+        "baro_altitude": "Alt (ft)",    
         "velocity": "Speed (km/h)",
         "source": "Data Source",
         "icao24": "Hex"
