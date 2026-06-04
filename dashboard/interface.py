@@ -263,7 +263,7 @@ def fetch_global_fusion(api_key):
             if altitude > 100000:
                 reasons.append("Extreme Altitude")
 
-            if (altitude > 10000 and velocity < 20) or (altitude > 50000 and velocity < 100):
+            if (altitude > 30000 and velocity < 20) or (altitude > 50000 and velocity < 100):
                 reasons.append("Airborne Velocity Anomaly")                
 
             if reasons:
@@ -280,6 +280,7 @@ def fetch_global_fusion(api_key):
             pass
 
     flagged_df = df[(df["military"] == True) &( df["Threat_Reason"] != "Military Asset")]
+    df["sightings"] = 0
     for _, row in flagged_df.iterrows():
             
         try:
@@ -395,7 +396,18 @@ def fetch_global_fusion(api_key):
                 "Tracking Error:",
                 e
             )
-                
+
+    try:
+        tracked = (supabase.table("aircraft_tracking").select("icao24,sightings").execute())
+
+            
+        sightings_lookup = {r["icao24"]: r["sightings"]for r in tracked.data}
+
+        df["sightings"] = df["icao24"].map(sightings_lookup).fillna(0)
+
+    except Exception:
+        pass
+
     return df
 
 # =====================================================================
@@ -446,7 +458,9 @@ else:
             "baro_altitude": True, 
             "velocity": True,
             "source": True,
-            "Classification": True
+            "Classification": True,
+            "Threat_Reason": True,
+            "sightings": True,
         },
         color="Classification",
         color_discrete_map={"Standard Track": "#00ffff", "Threat Alert": "#ff0033", "Military Asset": "#ffaa00"}, 
@@ -483,7 +497,7 @@ else:
         "military",
         "baro_altitude", 
         "velocity", 
-        "source", 
+        "sightings", 
         "icao24"
     ]
     
