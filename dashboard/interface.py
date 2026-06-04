@@ -347,7 +347,7 @@ def fetch_global_fusion(api_key):
                         str(row.get("Classification", "")),
 
                     "latest_reason":
-                        str(row.get("Threat_Reason", ""))
+                        str(row.get("Threat_Reason", "")),
 
                     "latitude": float(row.get("latitude", 0)),
                     "longitude": float(row.get("longitude", 0)),
@@ -391,7 +391,7 @@ def fetch_global_fusion(api_key):
                         str(row.get("Threat_Reason", "")),
 
                     "aircraft_type":
-                        str(row.get("aircraft_type", ""))
+                        str(row.get("aircraft_type", "")),
 
                     "latitude": float(row.get("latitude", 0)),
                     "longitude": float(row.get("longitude", 0)),
