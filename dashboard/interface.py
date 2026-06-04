@@ -298,6 +298,8 @@ def fetch_global_fusion(api_key):
  
                 "altitude": float(row.get("baro_altitude", 0)),
                 "velocity": float(row.get("velocity", 0)),
+                "latitude": float(row.get("latitude", 0)),
+                "longitude": float(row.get("longitude", 0)),
 
                 "source": str(row.get("source", ""))
 
@@ -347,6 +349,9 @@ def fetch_global_fusion(api_key):
                     "latest_reason":
                         str(row.get("Threat_Reason", ""))
 
+                    "latitude": float(row.get("latitude", 0)),
+                    "longitude": float(row.get("longitude", 0)),
+
                 }
 
                 if increment:
@@ -387,6 +392,9 @@ def fetch_global_fusion(api_key):
 
                     "aircraft_type":
                         str(row.get("aircraft_type", ""))
+
+                    "latitude": float(row.get("latitude", 0)),
+                    "longitude": float(row.get("longitude", 0)),
 
                 }).execute()
 
