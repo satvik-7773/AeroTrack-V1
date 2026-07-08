@@ -17,22 +17,22 @@ SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# --- RAW TERMINAL / CUSTOM REACT AESTHETIC ---
+# --- UPSCALED TERMINAL AESTHETIC ---
 st.markdown("""
     <style>
     #MainMenu, footer, header {visibility: hidden;}
-    .block-container { padding: 1rem 2rem; max-width: 100%; }
+    .block-container { padding: 1.5rem 2rem; max-width: 100%; }
     .main { background-color: #000000; color: #e0e0e0; font-family: 'SF Mono', Consolas, monospace; }
     
-    /* Custom Button */
+    /* Enlarged Custom Button */
     div.stButton > button:first-child {
-        background-color: transparent; color: #fff; border: 1px solid #333; 
-        border-radius: 0px; font-family: inherit; font-size: 12px; height: 35px;
+        background-color: transparent; color: #fff; border: 2px solid #333; 
+        border-radius: 0px; font-family: inherit; font-size: 16px; font-weight: bold; height: 50px;
     }
     div.stButton > button:first-child:hover { border-color: #fff; color: #fff; background: rgba(255,255,255,0.1); }
     
-    /* Hide default dataframe styling */
-    .stDataFrame { border: none !important; }
+    /* Hide default dataframe border and increase text size */
+    .stDataFrame { border: none !important; font-size: 16px !important; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -64,7 +64,7 @@ def fetch_global_fusion(api_key):
                     "icao24": hex_code, "callsign": str(ac.get("flight", "")).strip(),
                     "latitude": float(ac.get("lat") or 0), "longitude": float(ac.get("lon") or 0),
                     "baro_altitude": safe_float(ac.get("alt_baro")), "velocity": safe_float(ac.get("gs")) * 1.852,
-                    "aircraft_type": str(ac.get("t", "")), "military": True, "Classification": "MILITARY"
+                    "aircraft_type": str(ac.get("t", "")), "military": True, "Classification": "MILITARY", "source": "ADSB-MIL"
                 })
     except Exception: pass
 
@@ -79,8 +79,10 @@ def fetch_global_fusion(api_key):
                     "icao24": hex_code, "callsign": str(ac.get("flight_iata", "UNKN")).strip(),
                     "latitude": float(ac.get("lat") or 0), "longitude": float(ac.get("lng") or 0),
                     "baro_altitude": float(ac.get("alt") or 0) * 3.28084, "velocity": float(ac.get("speed") or 0),
+                    "heading": float(ac.get("dir") or 0), "vertical_rate": float(ac.get("v_speed") or 0),
                     "aircraft_type": str(ac.get("aircraft_icao", "UNKN")), "flight_number": str(ac.get("flight_iata", "UNKN")),
-                    "military": False
+                    "departure_iata": str(ac.get("dep_iata", "UNKN")), "airline_code": str(ac.get("airline_iata", "UNKN")),
+                    "military": False, "source": "AirLabs"
                 }
                 if hex_code in military_watchlist:
                     tactical_grid[hex_code].update({"military": True, "aircraft_type": military_watchlist[hex_code].get("aircraft_type", "UNKN")})
@@ -116,43 +118,42 @@ def fetch_global_fusion(api_key):
 # =====================================================================
 df = fetch_global_fusion(client.api_key)
 
-# Raw HTML Header instead of st.metric
 if not df.empty:
     mil_count = len(df[df['military'] == True])
     anom_count = len(df[df['Classification'] == 'ANOMALY'])
     
+    # Upscaled HTML Header 
     st.markdown(f"""
-    <div style="display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 1px solid #333; padding-bottom: 10px; margin-bottom: 20px;">
+    <div style="display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid #333; padding-bottom: 15px; margin-bottom: 25px;">
         <div>
-            <div style="font-size: 10px; color: #666; letter-spacing: 1px;">SYSTEM</div>
-            <div style="font-size: 18px; font-weight: bold; color: #fff;">AEROTRACK_V1</div>
+            <div style="font-size: 14px; color: #666; letter-spacing: 2px; font-weight: bold;">SYSTEM</div>
+            <div style="font-size: 32px; font-weight: bold; color: #fff;">AEROTRACK_V1</div>
         </div>
         <div>
-            <div style="font-size: 10px; color: #666; letter-spacing: 1px;">ACTIVE_TRACKS</div>
-            <div style="font-size: 18px; color: #00ffcc;">{len(df):,}</div>
+            <div style="font-size: 14px; color: #666; letter-spacing: 2px; font-weight: bold;">ACTIVE_TRACKS</div>
+            <div style="font-size: 32px; font-weight: bold; color: #00ffcc;">{len(df):,}</div>
         </div>
         <div>
-            <div style="font-size: 10px; color: #666; letter-spacing: 1px;">MILITARY_ASSETS</div>
-            <div style="font-size: 18px; color: #ffaa00;">{mil_count:,}</div>
+            <div style="font-size: 14px; color: #666; letter-spacing: 2px; font-weight: bold;">MILITARY_ASSETS</div>
+            <div style="font-size: 32px; font-weight: bold; color: #ffaa00;">{mil_count:,}</div>
         </div>
         <div>
-            <div style="font-size: 10px; color: #666; letter-spacing: 1px;">KINEMATIC_ANOMALIES</div>
-            <div style="font-size: 18px; color: #ff3333;">{anom_count:,}</div>
+            <div style="font-size: 14px; color: #666; letter-spacing: 2px; font-weight: bold;">ANOMALIES</div>
+            <div style="font-size: 32px; font-weight: bold; color: #ff3333;">{anom_count:,}</div>
         </div>
-        <div style="font-size: 10px; color: #444; text-align: right;">
+        <div style="font-size: 14px; color: #555; text-align: right; line-height: 1.5;">
             DATA: ADSB.LOL + AIRLABS<br>AUTH: SATVIK-7773
         </div>
     </div>
     """, unsafe_allow_html=True)
 
-    col_map, col_list = st.columns([7, 3])
+    col_map, col_list = st.columns([7.5, 2.5])
     
     with col_map:
-        # FLAT, FAST 2D PYDECK
         def assign_color(cls):
-            if cls == "ANOMALY": return [255, 51, 51, 200]
-            elif cls == "MILITARY": return [255, 170, 0, 200]
-            return [0, 255, 204, 60]
+            if cls == "ANOMALY": return [255, 51, 51, 220]
+            elif cls == "MILITARY": return [255, 170, 0, 220]
+            return [0, 255, 204, 80]
 
         df['color'] = df['Classification'].apply(assign_color)
         
@@ -161,34 +162,60 @@ if not df.empty:
             data=df,
             get_position='[longitude, latitude]',
             get_fill_color='color',
-            get_radius=3000,
-            radius_min_pixels=2,
-            radius_max_pixels=8,
+            get_radius=3500,
+            radius_min_pixels=3,
+            radius_max_pixels=10,
             pickable=True
         )
 
-        view_state = pdk.ViewState(latitude=20, longitude=0, zoom=1.2, pitch=0) # Flat pitch
+        view_state = pdk.ViewState(latitude=20, longitude=0, zoom=1.5, pitch=0) 
         
-        tooltip = {"html": "{icao24} | {callsign} | {aircraft_type} <br> FL{baro_altitude} | {velocity} km/h <br> <span style='color:orange'>{Classification}</span>", 
-                   "style": {"backgroundColor": "#000", "color": "#fff", "fontFamily": "monospace", "border": "1px solid #333", "fontSize": "11px"}}
+        tooltip = {"html": "{icao24} | {callsign} | {aircraft_type} <br> FL{baro_altitude} | {velocity} km/h <br> <span style='color:orange; font-weight:bold;'>{Classification}</span>", 
+                   "style": {"backgroundColor": "#000", "color": "#fff", "fontFamily": "monospace", "border": "1px solid #333", "fontSize": "14px"}}
 
         st.pydeck_chart(pdk.Deck(layers=[layer], initial_view_state=view_state, tooltip=tooltip, map_style="mapbox://styles/mapbox/dark-v11"), use_container_width=True)
 
     with col_list:
-        if st.button("RUN MANUAL SWEEP", use_container_width=True):
+        if st.button("EXECUTE MANUAL SWEEP", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
             
         st.write("")
-        display_cols = ["Classification", "icao24", "baro_altitude", "velocity", "Threat_Reason"]
-        df_disp = df[[c for c in display_cols if c in df.columns]].copy()
-        df_disp.rename(columns={"Classification": "CLASS", "icao24": "HEX", "baro_altitude": "ALT", "velocity": "SPD", "Threat_Reason": "FLAGS"}, inplace=True)
+        st.markdown("<div style='font-size: 18px; color: #fff; margin-bottom: 10px; font-weight: bold;'>TARGET WATCHLIST</div>", unsafe_allow_html=True)
         
-        if "CLASS" in df_disp.columns:
-            df_disp["_rank"] = df_disp["CLASS"].map({"ANOMALY": 0, "MILITARY": 1, "CIVILIAN": 2})
-            df_disp = df_disp.sort_values(by=["_rank", "ALT"], ascending=[True, False]).drop(columns=["_rank"])
+        # Displaying a compact snapshot in the sidebar for quick viewing
+        watch_cols = ["Classification", "icao24", "baro_altitude", "velocity"]
+        df_watch = df[[c for c in watch_cols if c in df.columns]].copy()
+        
+        if "Classification" in df_watch.columns:
+            df_watch["_rank"] = df_watch["Classification"].map({"ANOMALY": 0, "MILITARY": 1, "CIVILIAN": 2})
+            df_watch = df_watch.sort_values(by=["_rank", "baro_altitude"], ascending=[True, False]).drop(columns=["_rank"])
 
-        st.dataframe(df_disp, use_container_width=True, hide_index=True)
+        st.dataframe(df_watch, use_container_width=True, hide_index=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("<div style='font-size: 18px; color: #fff; margin-bottom: 10px; font-weight: bold; border-bottom: 1px solid #333; padding-bottom: 5px;'>UNFILTERED RAW TELEMETRY LOG</div>", unsafe_allow_html=True)
+    
+    # --- FULL OG DATALOG ---
+    # Reorder columns to put the most important stuff first, but drop nothing.
+    all_cols = df.columns.tolist()
+    front_cols = ["Classification", "icao24", "callsign", "aircraft_type", "military", "Threat_Reason"]
+    for c in reversed(front_cols):
+        if c in all_cols:
+            all_cols.insert(0, all_cols.pop(all_cols.index(c)))
+            
+    # Remove the rendering 'color' column from the data log output
+    if "color" in all_cols:
+        all_cols.remove("color")
+        
+    df_full = df[all_cols].copy()
+    
+    # Sort so anomalies and military are at the top of the master log
+    if "Classification" in df_full.columns:
+        df_full["_rank"] = df_full["Classification"].map({"ANOMALY": 0, "MILITARY": 1, "CIVILIAN": 2})
+        df_full = df_full.sort_values(by=["_rank", "baro_altitude"], ascending=[True, False]).drop(columns=["_rank"])
+
+    st.dataframe(df_full, use_container_width=True, hide_index=True)
 
 else:
     st.error("ERR_NO_DATA: Check network or API quota.")
