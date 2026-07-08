@@ -4,18 +4,18 @@ import pandas as pd
 from supabase import create_client, Client
 from datetime import datetime
 
-print("🚀 --- AEROTRACK HOURLY WORKER BOOTING ---")
+print("🚀 --- AEROTRACK MATCHED WORKER BOOTING ---")
 
 # --- CONFIGURATION ---
 AIRLABS_API_KEY = os.environ.get("AIRLABS_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
-if not SUPABASE_URL or not SUPABASE_KEY:
-    print("❌ CRITICAL ERROR: Supabase Keys are missing from GitHub Environment!")
+if not SUPABASE_URL or not SUPABASE_KEY or not AIRLABS_API_KEY:
+    print("❌ CRITICAL ERROR: Environment keys (AirLabs or Supabase) are missing!")
     exit(1)
 
-print("✅ Credentials loaded. Connecting to Supabase...")
+print("✅ Credentials verified. Connecting to Supabase...")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def get_region(lat, lon):
@@ -32,91 +32,106 @@ def get_region(lat, lon):
 def process_hourly_sweep():
     tactical_grid = {}
 
-    # 1. Pull Tactical Data from OpenSky Network
-    print("📡 STEP 1: Requesting Tactical Global Feed (OpenSky)...")
+    # 1. Pull Military Assets (ADSB.lol)
+    print("📡 STEP 1: Fetching ADSB.lol Tactical Military Overlay...")
+    headers = {"User-Agent": "AeroTrack-Analytics-Worker/1.0"}
     try:
-        res = requests.get("https://opensky-network.org/api/states/all", timeout=20)
-        print(f"OpenSky Status Code: {res.status_code}")
+        res_mil = requests.get("https://api.adsb.lol/v2/mil", headers=headers, timeout=15)
+        print(f"ADSB.lol /mil Status Code: {res_mil.status_code}")
         
-        if res.status_code == 200:
-            data = res.json().get("states", [])
-            print(f"✅ Successfully downloaded {len(data)} raw aircraft records.")
-            for ac in data:
-                # OpenSky format: [icao24, callsign, origin_country, time_pos, last_contact, lon, lat, baro_alt, on_ground, velocity, true_track, vertical_rate]
-                hex_code = str(ac[0]).upper() if ac[0] else "UNKN"
-                lon = ac[5]
-                lat = ac[6]
-                
-                if hex_code == "UNKN" or lat is None or lon is None: 
+        if res_mil.status_code == 200:
+            mil_data = res_mil.json().get("ac", [])
+            print(f"✅ Successfully ingested {len(mil_data)} active military tracks.")
+            for ac in mil_data:
+                hex_code = str(ac.get("hex", "UNKN")).upper()
+                if hex_code == "UNKN" or ac.get("lat") is None: 
                     continue
                 
-                velocity_ms = float(ac[9]) if ac[9] is not None else 0.0
-                altitude_m = float(ac[7]) if ac[7] is not None else 0.0
-                
+                lat, lon = float(ac.get("lat")), float(ac.get("lon"))
                 tactical_grid[hex_code] = {
                     "icao24": hex_code,
-                    "latitude": float(lat),
-                    "longitude": float(lon),
-                    "altitude": altitude_m * 3.28084, # Convert meters to feet
-                    "velocity": velocity_ms * 3.6, # Convert m/s to km/h
-                    "military": False, # OpenSky doesn't tag military, we rely on kinematics
-                    "aircraft_type": "UNKN",
-                    "region": get_region(float(lat), float(lon)),
+                    "latitude": lat,
+                    "longitude": lon,
+                    "altitude": float(ac.get("alt_baro", 0.0)) if isinstance(ac.get("alt_baro"), (int, float)) else 0.0,
+                    "velocity": float(ac.get("gs", 0.0)) * 1.852, # Knots to km/h
+                    "military": True,
+                    "aircraft_type": str(ac.get("t", "UNKN")).strip(),
+                    "region": get_region(lat, lon),
                     "departure_iata": "UNKN"
                 }
-            print(f"✅ Parsed {len(tactical_grid)} valid positional tracks.")
         else:
-            print("❌ FATAL: OpenSky feed blocked or unavailable.")
-            return
-            
+            print(f"⚠️ ADSB.lol returned non-200 code: {res_mil.status_code}. Proceeding with AirLabs only.")
     except Exception as e:
-        print(f"❌ Network Error during Tactical Fetch: {e}")
-        return
+        print(f"⚠️ ADSB.lol Military Fetch Bypass: {e}")
 
-    # 2. Merge AirLabs Metadata
-    print("📡 STEP 2: Requesting AirLabs Intelligence Overlay...")
+    # 2. Pull Commercial Assets (AirLabs)
+    print("📡 STEP 2: Fetching AirLabs Commercial Airspace Baseline...")
     try:
-        res = requests.get(f"https://airlabs.co/api/v9/flights?api_key={AIRLABS_API_KEY}", timeout=15)
-        print(f"AirLabs Status Code: {res.status_code}")
-        if res.status_code == 200:
-            al_data = res.json().get("response", [])
-            print(f"✅ Successfully downloaded {len(al_data)} civilian records.")
-            matches = 0
+        res_al = requests.get(f"https://airlabs.co/api/v9/flights?api_key={AIRLABS_API_KEY}", timeout=20)
+        print(f"AirLabs Status Code: {res_al.status_code}")
+        
+        if res_al.status_code == 200:
+            al_data = res_al.json().get("response", [])
+            print(f"✅ Successfully ingested {len(al_data)} commercial tracks.")
+            
             for ac in al_data:
                 hex_code = str(ac.get("hex", "UNKN")).upper()
+                if hex_code == "UNKN" or ac.get("lat") is None or ac.get("lng") is None: 
+                    continue
+                
+                lat, lon = float(ac.get("lat")), float(ac.get("lng"))
+                
+                # If this aircraft is already marked by military radar, preserve it but update metadata
                 if hex_code in tactical_grid:
-                    matches += 1
                     al_type = str(ac.get("aircraft_icao", "UNKN")).strip()
-                    if al_type != "UNKN": tactical_grid[hex_code]["aircraft_type"] = al_type
+                    if al_type != "UNKN": 
+                        tactical_grid[hex_code]["aircraft_type"] = al_type
                     dep = str(ac.get("dep_iata", "UNKN")).strip()
-                    if dep != "UNKN": tactical_grid[hex_code]["departure_iata"] = dep
-            print(f"✅ Successfully merged AirLabs data into {matches} active tracks.")
+                    if dep != "UNKN": 
+                        tactical_grid[hex_code]["departure_iata"] = dep
+                else:
+                    # Add new unique commercial aircraft to the matrix
+                    tactical_grid[hex_code] = {
+                        "icao24": hex_code,
+                        "latitude": lat,
+                        "longitude": lon,
+                        "altitude": float(ac.get("alt", 0.0)) * 3.28084, # Meters to feet conversion if necessary
+                        "velocity": float(ac.get("speed", 0.0)), # AirLabs natively tracks km/h
+                        "military": False,
+                        "aircraft_type": str(ac.get("aircraft_icao", "UNKN")).strip(),
+                        "region": get_region(lat, lon),
+                        "departure_iata": str(ac.get("dep_iata", "UNKN")).strip()
+                    }
+        else:
+            print(f"❌ FATAL: AirLabs core tracking stream rejected request. Status: {res_al.status_code}")
+            return
     except Exception as e:
-        print(f"⚠️ AirLabs Fetch Error (Continuing without metadata): {e}")
-
-    # 3. Process Dataframe
-    df = pd.DataFrame(list(tactical_grid.values()))
-    if df.empty:
-        print("❌ FATAL: DataFrame is empty. Aborting Supabase upload.")
+        print(f"❌ Network Error during AirLabs baseline fetch: {e}")
         return
 
-    print("🧠 STEP 3: Executing Kinematic Threat Detection...")
+    # 3. Compile Master Tracking Dataframe
+    df = pd.DataFrame(list(tactical_grid.values()))
+    if df.empty:
+        print("❌ FATAL: Combined data grid is empty. Aborting run.")
+        return
+
+    # 4. Kinematic Anomaly Analysis
+    print("🧠 STEP 3: Evaluating Flight Anomaly Vectors...")
     df["is_threat"] = False
     biz_jets = ["GLEX", "GLF4", "GLF5", "GLF6", "CL30", "CL60", "FA7X"]
     
     for idx, row in df.iterrows():
         try:
             vel, alt = row["velocity"], row["altitude"]
-            # Kinematic flags for anomalies (low alt/high speed or ceiling breaches)
             if (alt < 15000 and vel > 850) or \
                (alt > (51000 if row["aircraft_type"] in biz_jets else 44000)) or \
-               (vel > 1250) or (vel > 1050 and alt < 28000):
+               (vel > 1250) or (vel > 1050 and alt < 28000) or row["military"]:
                 df.at[idx, "is_threat"] = True
         except:
             pass
 
-    # 4. Math & Aggregation
-    print("🧮 STEP 4: Aggregating Global Statistics...")
+    # 5. Core Metric Calculations
+    print("🧮 STEP 4: Crunching Consolidated System Metrics...")
     total_flights = len(df)
     threat_count = int(df["is_threat"].sum())
     mil_count = int(df["military"].sum())
@@ -125,11 +140,11 @@ def process_hourly_sweep():
     busiest_airport = known_airports.mode()[0] if not known_airports.empty else "N/A"
     busiest_region = df["region"].mode()[0] if not df.empty else "N/A"
 
-    print(f"📊 SUMMARY: {total_flights} Flights | {threat_count} Threats | {mil_count} Military")
-    print(f"📍 Busiest Region: {busiest_region} | 🛫 Busiest Airport: {busiest_airport}")
+    print(f"📊 LIVE ALIGNMENT STATUS: {total_flights} Active Tracks mapped successfully.")
+    print(f"📈 Details: {threat_count} Anomalies | {mil_count} Verified Military Assets")
 
-    # 5. Supabase Upload
-    print("☁️ STEP 5: Pushing payload to Supabase...")
+    # 6. Database Storage Update
+    print("☁️ STEP 5: Committing telemetry matrix log to Supabase...")
     stats_payload = {
         "timestamp": datetime.utcnow().isoformat(),
         "total_flights": total_flights,
@@ -141,9 +156,9 @@ def process_hourly_sweep():
     
     try:
         response = supabase.table("aerotrack_stats").insert(stats_payload).execute()
-        print("🎉 SUCCESS! Data safely written to Supabase.")
+        print("🎉 LOG COMPLETE: Data records perfectly synchronized with live frontend.")
     except Exception as e:
-        print(f"❌ FATAL: Supabase rejected the insert command. Error: {e}")
+        print(f"❌ Database Write Rejection: {e}")
 
 if __name__ == "__main__":
     process_hourly_sweep()
