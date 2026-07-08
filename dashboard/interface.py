@@ -4,25 +4,96 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import requests
 import streamlit as st
 import pandas as pd
-import plotly.express as px
+import pydeck as pdk
 from pathlib import Path
-import time
 from data_ingestion.client import OpenSkyClient
 from supabase import create_client
 
 # =====================================================================
 # INITIALIZATION & CONFIGURATION
 # =====================================================================
+st.set_page_config(
+    page_title="AeroTrack-V1 // Airspace Monitor",
+    page_icon="🛰️",
+    layout="wide",
+    initial_sidebar_state="collapsed" # Start collapsed for a cleaner screen
+)
+
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
-
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# --- ADVANCED TACTICAL CSS ---
+st.markdown("""
+    <style>
+    /* Hide Streamlit Branding completely */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    
+    /* Maximize Screen Real Estate */
+    .block-container {
+        padding-top: 1rem; 
+        padding-bottom: 0rem; 
+        padding-left: 2rem; 
+        padding-right: 2rem;
+        max-width: 100%;
+    }
+    
+    /* Core Background */
+    .main { background-color: #06090e; color: #e2e8f0; }
+    
+    /* Sleek Action Buttons */
+    div.stButton > button:first-child {
+        background-color: rgba(0, 136, 204, 0.1); 
+        color: #00ffff; 
+        border-radius: 4px;
+        font-family: 'Courier New', monospace;
+        font-weight: bold; 
+        border: 1px solid #0088cc; 
+        height: 3em;
+        transition: all 0.3s ease;
+    }
+    div.stButton > button:first-child:hover { 
+        background-color: rgba(0, 136, 204, 0.4); 
+        box-shadow: 0 0 15px rgba(0, 136, 204, 0.5);
+    }
+    
+    /* Tactical Metric Cards */
+    div[data-testid="stMetric"] {
+        background-color: rgba(18, 24, 36, 0.8);
+        padding: 15px; 
+        border-radius: 4px; 
+        border: 1px solid rgba(0, 255, 255, 0.15); 
+        border-left: 3px solid #00ffff;
+        box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.5);
+    }
+    [data-testid="stMetricValue"] {
+        font-family: 'Courier New', Courier, monospace;
+        color: #00ffff;
+        font-size: 1.8rem;
+    }
+    [data-testid="stMetricLabel"] {
+        color: #64748b;
+        text-transform: uppercase;
+        letter-spacing: 1.5px;
+        font-size: 0.8rem;
+    }
+    [data-testid="stMetricDelta"] {
+        font-family: 'Courier New', Courier, monospace;
+    }
+    
+    /* Dataframe Styling */
+    .stDataFrame {
+        border: 1px solid rgba(0, 255, 255, 0.2) !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
 try:
     result = supabase.table("anomaly_history").select("*").limit(1).execute()
-    st.sidebar.success("Supabase Connected")
 except Exception as e:
-    st.sidebar.error(f"Supabase Error: {e}")
+    st.error(f"Supabase Connection Error: {e}")
 
 def safe_float(value, default=0.0):
     try:
@@ -30,27 +101,8 @@ def safe_float(value, default=0.0):
     except (TypeError, ValueError):
         return default
 
-st.set_page_config(
-    page_title="AeroTrack-V1 // Airspace Monitor",
-    page_icon="🛰️",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-st.markdown("""
-    <style>
-    .main { background-color: #0b0e14; color: #ffffff; }
-    div.stButton > button:first-child {
-        background-color: #0088cc; color: white; border-radius: 4px;
-        font-weight: bold; border: none; height: 3em;
-    }
-    div.stButton > button:first-child:hover { background-color: #006699; }
-    .stMetric { background-color: #121824; padding: 15px; border-radius: 5px; border-left: 3px solid #00ffff; }
-    </style>
-    """, unsafe_allow_html=True)
-
 # =====================================================================
-# 1. CORE DATA INGESTION ENGINE (ADSB.LOL FUSION)
+# 1. CORE DATA INGESTION ENGINE
 # =====================================================================
 try:
     client = OpenSkyClient()
@@ -65,7 +117,6 @@ def fetch_global_fusion(api_key):
     # --- FEED 1: ADSB.LOL MILITARY OVERLAY ---
     military_watchlist = {}
     military_tracks = []
-
     try:
         mil_url = "https://api.adsb.lol/v2/mil"
         response = requests.get(mil_url, headers={"User-Agent": "AeroTrack-Global/1.0"}, timeout=15)
@@ -95,17 +146,14 @@ def fetch_global_fusion(api_key):
                     "source": "ADSB-MIL",
                     "Classification": "Military Asset"
                 })
-    except Exception as e:
-        st.warning(f"ADSB Military Feed Offline: {e}")
+    except Exception:
+        pass
 
     # --- FEED 2: AIRLABS GLOBAL METADATA OVERLAY ---
     try:
         airlabs_url = f"https://airlabs.co/api/v9/flights?api_key={api_key}"
         response = requests.get(airlabs_url, timeout=15)
-        
-        aircraft_list = []
-        if response.status_code == 200:
-            aircraft_list = response.json().get("response", [])
+        aircraft_list = response.json().get("response", []) if response.status_code == 200 else []
         
         for ac in aircraft_list:
             try:
@@ -133,18 +181,15 @@ def fetch_global_fusion(api_key):
                 if hex_code in military_watchlist:
                     tactical_grid[hex_code]["military"] = True
                     adsb_type = military_watchlist[hex_code].get("aircraft_type")
-                    if adsb_type:
-                        tactical_grid[hex_code]["aircraft_type"] = adsb_type
-                        
-            except Exception as aircraft_error:
+                    if adsb_type: tactical_grid[hex_code]["aircraft_type"] = adsb_type
+            except Exception:
                 continue
     except Exception as e:
         st.error(f"AirLabs Error: {e}")
 
     # --- DATAFRAME GENERATION & KINEMATICS ---
     final_list = list(tactical_grid.values())
-    if not final_list:
-        return pd.DataFrame()
+    if not final_list: return pd.DataFrame()
         
     df = pd.DataFrame(final_list)
     mil_df = pd.DataFrame(military_tracks)
@@ -199,7 +244,6 @@ def fetch_global_fusion(api_key):
     flagged_df = df[(df["military"] == True) & (df["Threat_Reason"] != "Military Asset")]
     df["sightings"] = 0
     
-    # DB Sync logic minimized for readability, executes in background
     for _, row in flagged_df.iterrows():
         try:
             supabase.table("anomaly_history").insert({
@@ -249,19 +293,13 @@ def fetch_global_fusion(api_key):
 # 2. SUPABASE INTELLIGENCE ANALYTICS LAYER
 # =====================================================================
 def render_analytics_dashboard():
-    st.subheader("📊 Global Airspace Intelligence")
-    
     try:
         res = supabase.table("aerotrack_stats").select("*").order("timestamp", desc=True).limit(24).execute()
         stats_df = pd.DataFrame(res.data)
     except Exception as e:
-        st.error(f"Failed to connect to Intelligence Database: {e}")
         return
 
-    if stats_df.empty:
-        st.info("Gathering historical telemetry. Check back after the next hourly sweep.")
-        return
-
+    if stats_df.empty: return
     current = stats_df.iloc[0]
 
     if len(stats_df) > 1:
@@ -280,121 +318,104 @@ def render_analytics_dashboard():
     threat_delta = curr_threat_pct - avg_threat_pct
     mil_delta = curr_mil_pct - avg_mil_pct
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4, col5 = st.columns([1.5, 1.5, 1.5, 2, 2])
     
-    col1.metric("Total Airspace Congestion", f"{int(current['total_flights']):,}", f"{flight_delta:.2f}% vs 24h avg", delta_color="inverse")
-    col2.metric("Anomalous / Threat Trajectories", f"{curr_threat_pct:.2f}%", f"{threat_delta:.2f}% vs 24h avg", delta_color="inverse")
-    col3.metric("Military Asset Density", f"{curr_mil_pct:.2f}%", f"{mil_delta:.2f}% vs 24h avg", delta_color="off")
-
-    st.write("")
-    col4, col5 = st.columns(2)
-    with col4:
-        st.info(f"📍 **Highest Density Region:** {current['busiest_region']}")
-    with col5:
-        st.info(f"🛫 **Most Active Airport:** {current['busiest_airport']} (IATA)")
-        
-    st.divider()
+    col1.metric("Global Density", f"{int(current['total_flights']):,}", f"{flight_delta:.2f}% (24h)", delta_color="inverse")
+    col2.metric("Threat Trajectories", f"{curr_threat_pct:.2f}%", f"{threat_delta:.2f}% (24h)", delta_color="inverse")
+    col3.metric("Military Asset %", f"{curr_mil_pct:.2f}%", f"{mil_delta:.2f}% (24h)", delta_color="off")
+    col4.info(f"📍 **Dense Region:**\n{current['busiest_region']}")
+    col5.info(f"🛫 **Active Hub:**\n{current['busiest_airport']} (IATA)")
+    st.markdown("<br>", unsafe_allow_html=True)
 
 
 # =====================================================================
 # 3. APPLICATION HEADER & UI EXECUTION
 # =====================================================================
-st.title("🛰️ AeroTrack-V1 // Global Tactical Monitor")
-st.caption("Unrestricted Global Radar Fusion (ADSB.lol + AirLabs Intelligence)")
-st.divider()
+st.markdown("<h2 style='color: #ffffff; font-family: Courier New;'>🛰️ AEROTRACK-V1 // COMMAND CONSOLE</h2>", unsafe_allow_html=True)
 
-# Inject the new Analytics Dashboard right here at the top
 render_analytics_dashboard()
-
-st.sidebar.header("Command Center Controls")
 
 # --- GRAPHICS RENDERING LAYER ---
 df = fetch_global_fusion(client.api_key)
 
-if df.empty:
-    st.warning("⚠️ Warning: No active tracking streams detected. Check network connections or API Quota.")
-else:
-    st.markdown("Execute the 'Global Fusion Sweep' to pull live tactical updates.")
-
-    if st.button("📡 Execute Global Fusion Sweep", width="stretch"):
-        st.cache_data.clear()
-        st.toast("Executing full planetary sweep...", icon="🌍")
-
-        with st.spinner("Stitching global tactical tracks with commercial metadata..."):
-            df = fetch_global_fusion(client.api_key)
-
-    total_targets = len(df)
-    threat_count = len(df[df["Classification"] == "Threat Alert"])
-    mil_count = len(df[df["military"] == True])
+if not df.empty:
+    col_a, col_b = st.columns([8, 2])
     
-    m1, m2, m3 = st.columns(3)
-    m1.metric(label="Live Rendered Tracks", value=f"{total_targets} Targets")
-    m2.metric(label="Active Threats / Military", value=f"{threat_count} / {mil_count}")
-    m3.metric(label="Radar Status", value="GLOBAL FUSION ACTIVE 🔴")
-    st.write("")
-    
-    fig = px.scatter_mapbox(
-        df,
-        lat="latitude",
-        lon="longitude",
-        hover_name="callsign",
-        hover_data={
-            "icao24": True,
-            "aircraft_type": True,
-            "flight_number": True,
-            "military": True,
-            "baro_altitude": True, 
-            "velocity": True,
-            "source": True,
-            "Classification": True,
-            "Threat_Reason": True,
-            "sightings": True,
-        },
-        color="Classification",
-        color_discrete_map={"Standard Track": "#00ffff", "Threat Alert": "#ff0033", "Military Asset": "#ffaa00"}, 
-        size_max=12,
-        zoom=1.5,
-        height=700
-    )
-    
-    fig.update_layout(
-        mapbox_style="carto-darkmatter",
-        margin={"r":0,"t":0,"l":0,"b":0},
-        paper_bgcolor="#0b0e14",
-        plot_bgcolor="#0b0e14",
-        font_color="#ffffff",
-        legend=dict(
-            yanchor="top", y=0.98,
-            xanchor="left", x=0.01,
-            bgcolor="rgba(11, 14, 20, 0.8)",
-            font=dict(color="#ffffff")
+    with col_a:
+        st.markdown("<p style='color:#00ffff; font-family:Courier; font-size:14px;'>LIVE SPATIAL RENDER LAYER</p>", unsafe_allow_html=True)
+        
+        # Color mapping for PyDeck [R, G, B, Alpha]
+        def get_color(classification):
+            if classification == "Threat Alert": return [255, 0, 51, 255] # Neon Red
+            elif classification == "Military Asset": return [255, 170, 0, 255] # Gold/Amber
+            else: return [0, 200, 255, 120] # Cyan Translucent
+
+        df['color'] = df['Classification'].apply(get_color)
+        
+        # 3D Column Layer for Altitude Visualization
+        layer = pdk.Layer(
+            'ColumnLayer',
+            data=df,
+            get_position='[longitude, latitude]',
+            get_elevation='baro_altitude',
+            elevation_scale=5, # Exaggerate altitude to make stratospheres visible
+            radius=4000,
+            get_fill_color='color',
+            pickable=True,
+            auto_highlight=True,
         )
-    )
-    
-    st.plotly_chart(fig, width="stretch")
 
-    st.divider()
-    st.subheader("Active Airspace Intelligence Log")
+        view_state = pdk.ViewState(
+            latitude=df['latitude'].mean() if not df.empty else 20,
+            longitude=df['longitude'].mean() if not df.empty else 0,
+            zoom=1.5,
+            pitch=45, # Tilted perspective for 3D
+            bearing=0
+        )
+
+        tooltip = {
+            "html": "<b>Hex:</b> {icao24} <br/> <b>Callsign:</b> {callsign} <br/> <b>Airframe:</b> {aircraft_type} <br/> <b>Alt:</b> {baro_altitude} ft <br/> <b>Status:</b> <span style='color:orange;'>{Classification}</span>",
+            "style": {"backgroundColor": "#121824", "color": "#ffffff", "border": "1px solid #00ffff", "font-family": "Courier"}
+        }
+
+        r = pdk.Deck(
+            layers=[layer], 
+            initial_view_state=view_state, 
+            tooltip=tooltip, 
+            map_style="mapbox://styles/mapbox/dark-v11"
+        )
+        
+        st.pydeck_chart(r, use_container_width=True)
+
+    with col_b:
+        st.markdown("<p style='color:#00ffff; font-family:Courier; font-size:14px;'>SYSTEM CONTROLS</p>", unsafe_allow_html=True)
+        if st.button("📡 INITIATE FUSION SWEEP", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
+            
+        st.write("")
+        st.metric(label="Live Rendered Tracks", value=f"{len(df)} Targets")
+        st.metric(label="Active Threats", value=f"{len(df[df['Classification'] == 'Threat Alert'])}")
+        st.metric(label="Military Assets", value=f"{len(df[df['military'] == True])}")
+
+    st.markdown("<br>", unsafe_allow_html=True)
     
-    display_columns = [
-        "Classification", "Threat_Reason", "flight_number", "aircraft_type",
-        "departure_iata", "military", "baro_altitude", "velocity", "sightings", "icao24"
-    ]
-    
+    # Custom Dataframe styling
+    display_columns = ["Classification", "Threat_Reason", "flight_number", "aircraft_type", "military", "baro_altitude", "velocity", "icao24"]
     available_cols = [col for col in display_columns if col in df.columns]
     df_display = df[available_cols].copy()
     
     df_display = df_display.rename(columns={
-        "Classification": "Threat Status", "Threat_Reason": "Reason", "flight_number": "Flight No.",
-        "aircraft_type": "Airframe", "departure_iata": "Origin", "military": "Mil Asset",
-        "baro_altitude": "Alt (ft)", "velocity": "Speed (km/h)", "source": "Data Source", "icao24": "Hex"
+        "Classification": "Status", "Threat_Reason": "Reason", "flight_number": "Flight No.",
+        "aircraft_type": "Airframe", "military": "Mil Asset",
+        "baro_altitude": "Alt (ft)", "velocity": "Speed (km/h)", "icao24": "Hex"
     })
     
-    if "Threat Status" in df_display.columns:
-        df_display["_sort_rank"] = df_display["Threat Status"].apply(lambda x: 0 if x == "Threat Alert" else 1)
-        df_display = df_display.sort_values(by=["_sort_rank", "Alt (ft)"], ascending=[True, False])
-        df_display = df_display.drop(columns=["_sort_rank"])
+    if "Status" in df_display.columns:
+        df_display["_sort_rank"] = df_display["Status"].apply(lambda x: 0 if x == "Threat Alert" else (1 if x == "Military Asset" else 2))
+        df_display = df_display.sort_values(by=["_sort_rank", "Alt (ft)"], ascending=[True, False]).drop(columns=["_sort_rank"])
 
-    st.dataframe(df_display, width="stretch", hide_index=True)
+    st.dataframe(df_display, use_container_width=True, hide_index=True)
 
-st.markdown("--- *Unrestricted Global Telemetry Fusion via ADSB.lol • Designed & Built by - Satvik (satvik-7773)*")
+else:
+    st.warning("⚠️ Warning: No active tracking streams detected.")
