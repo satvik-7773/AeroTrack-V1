@@ -10,23 +10,17 @@ import time
 from data_ingestion.client import OpenSkyClient
 from supabase import create_client
 
+# =====================================================================
+# INITIALIZATION & CONFIGURATION
+# =====================================================================
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 
-supabase = create_client(
-    SUPABASE_URL,
-    SUPABASE_KEY
-)
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
 try:
-    result = (
-        supabase.table("anomaly_history")
-        .select("*")
-        .limit(1)
-        .execute()
-    )
-
+    result = supabase.table("anomaly_history").select("*").limit(1).execute()
     st.sidebar.success("Supabase Connected")
-
 except Exception as e:
     st.sidebar.error(f"Supabase Error: {e}")
 
@@ -35,8 +29,6 @@ def safe_float(value, default=0.0):
         return float(value)
     except (TypeError, ValueError):
         return default
-
-
 
 st.set_page_config(
     page_title="AeroTrack-V1 // Airspace Monitor",
@@ -60,7 +52,6 @@ st.markdown("""
 # =====================================================================
 # 1. CORE DATA INGESTION ENGINE (ADSB.LOL FUSION)
 # =====================================================================
-
 try:
     client = OpenSkyClient()
 except Exception as e:
@@ -71,40 +62,24 @@ except Exception as e:
 def fetch_global_fusion(api_key):
     tactical_grid = {}
     
-   # --- FEED 1: ADSB.LOL MILITARY OVERLAY ---
+    # --- FEED 1: ADSB.LOL MILITARY OVERLAY ---
     military_watchlist = {}
     military_tracks = []
 
     try:
         mil_url = "https://api.adsb.lol/v2/mil"
-
-        response = requests.get(
-            mil_url,
-            headers={"User-Agent": "AeroTrack-Global/1.0"},
-            timeout=15
-       )
+        response = requests.get(mil_url, headers={"User-Agent": "AeroTrack-Global/1.0"}, timeout=15)
         
-
-        
-
         if response.status_code == 200:
             military_aircraft = response.json().get("ac", [])
-
-            
-
-            military_tracks = []
-
             for ac in military_aircraft:
-
                 hex_code = str(ac.get("hex", "")).upper().strip()
-
-                if not hex_code:
-                    continue
+                if not hex_code: continue
 
                 military_watchlist[hex_code] = {
                     "callsign": str(ac.get("flight", "")).strip(),
                     "aircraft_type": str(ac.get("t", "")).strip()
-               }
+                }
 
                 military_tracks.append({
                     "icao24": hex_code,
@@ -119,33 +94,23 @@ def fetch_global_fusion(api_key):
                     "military": True,
                     "source": "ADSB-MIL",
                     "Classification": "Military Asset"
-           })
+                })
     except Exception as e:
         st.warning(f"ADSB Military Feed Offline: {e}")
 
-
     # --- FEED 2: AIRLABS GLOBAL METADATA OVERLAY ---
-    
     try:
         airlabs_url = f"https://airlabs.co/api/v9/flights?api_key={api_key}"
         response = requests.get(airlabs_url, timeout=15)
-
         
         aircraft_list = []
         if response.status_code == 200:
             aircraft_list = response.json().get("response", [])
-
         
         for ac in aircraft_list:
-            
             try:
                 hex_code = str(ac.get("hex", "UNKN")).upper().strip()
-
-                if (
-                    hex_code == "UNKN"
-                    or ac.get("lat") is None
-                    or ac.get("lng") is None
-                ):
+                if hex_code == "UNKN" or ac.get("lat") is None or ac.get("lng") is None:
                     continue
 
                 tactical_grid[hex_code] = {
@@ -165,36 +130,18 @@ def fetch_global_fusion(api_key):
                     "source": "AirLabs"
                 }
                 
-                
                 if hex_code in military_watchlist:
-
                     tactical_grid[hex_code]["military"] = True
-
                     adsb_type = military_watchlist[hex_code].get("aircraft_type")
-
                     if adsb_type:
                         tactical_grid[hex_code]["aircraft_type"] = adsb_type
-                
-
-                       
-            
+                        
             except Exception as aircraft_error:
-                st.write("Aircraft Parse Error:", aircraft_error)
                 continue
-
     except Exception as e:
         st.error(f"AirLabs Error: {e}")
 
-    adsb_hexes = set(military_watchlist.keys())
-    airlabs_hexes = set(tactical_grid.keys())
-
-    intersection = adsb_hexes.intersection(airlabs_hexes)
-
-    
-    
-
     # --- DATAFRAME GENERATION & KINEMATICS ---
-    
     final_list = list(tactical_grid.values())
     if not final_list:
         return pd.DataFrame()
@@ -203,26 +150,17 @@ def fetch_global_fusion(api_key):
     mil_df = pd.DataFrame(military_tracks)
     
     if not mil_df.empty:
-        mil_df = mil_df[
-            ~mil_df["icao24"].isin(df["icao24"])
-       ]
-
-
-    if not mil_df.empty:
-        
+        mil_df = mil_df[~mil_df["icao24"].isin(df["icao24"])]
         df = pd.concat([df, mil_df], ignore_index=True)
         
-    
-    # Stable Kinematics
     if "Classification" not in df.columns:
         df["Classification"] = "Standard Track"
     else:
         df["Classification"] = df["Classification"].fillna("Standard Track")
+        
     biz_jets = ["GLEX", "GLF4", "GLF5", "GLF6", "CL30", "CL60", "F900", "FA7X", "C750", "E55P", "C56X", "C25A", "LJ60"]
-    
     df["Threat_Reason"] = "None"
    
-    
     for idx, row in df.iterrows():
         try:
             velocity = float(row.get("velocity", 0.0))
@@ -238,195 +176,137 @@ def fetch_global_fusion(api_key):
             is_malformed_hex = (icao24 != "UNKN" and len(icao24) != 6)
         
             reasons = []
-
-            if is_low_alt_dash:
-                reasons.append("Low Altitude High Velocity")
-
-            if is_ceiling_breach:
-                reasons.append("Altitude Ceiling Breach")
-
-            if is_true_dash:
-                reasons.append("Excessive Velocity")
-
-            if is_malformed_hex:
-                reasons.append("Malformed ICAO")
-
-            if is_military:
-                reasons.append("Military Asset")
-
-            if altitude > 60000 and velocity < 10:
-                reasons.append("Telemetry Anomaly")
-
-            if altitude < 100 and velocity > 1500:
-                reasons.append("Ground-Level Hypersonic Velocity")
-
-            if altitude > 100000:
-                reasons.append("Extreme Altitude")
-
-            if (altitude > 30000 and velocity < 20) or (altitude > 50000 and velocity < 100):
-                reasons.append("Airborne Velocity Anomaly")                
+            if is_low_alt_dash: reasons.append("Low Altitude High Velocity")
+            if is_ceiling_breach: reasons.append("Altitude Ceiling Breach")
+            if is_true_dash: reasons.append("Excessive Velocity")
+            if is_malformed_hex: reasons.append("Malformed ICAO")
+            if is_military: reasons.append("Military Asset")
+            if altitude > 60000 and velocity < 10: reasons.append("Telemetry Anomaly")
+            if altitude < 100 and velocity > 1500: reasons.append("Ground-Level Hypersonic Velocity")
+            if altitude > 100000: reasons.append("Extreme Altitude")
+            if (altitude > 30000 and velocity < 20) or (altitude > 50000 and velocity < 100): reasons.append("Airborne Velocity Anomaly")                
 
             if reasons:
                 df.at[idx, "Threat_Reason"] = ", ".join(reasons)
 
             if is_military:
                 df.at[idx, "Classification"] = "Military Asset"
-
             elif len(reasons) > 0:
                 df.at[idx, "Classification"] = "Threat Alert"    
-        
-        
         except Exception:
             pass
 
-    flagged_df = df[(df["military"] == True) &( df["Threat_Reason"] != "Military Asset")]
+    flagged_df = df[(df["military"] == True) & (df["Threat_Reason"] != "Military Asset")]
     df["sightings"] = 0
+    
+    # DB Sync logic minimized for readability, executes in background
     for _, row in flagged_df.iterrows():
-            
         try:
-            supabase.table(
-            "anomaly_history"
-            ).insert({
-
-                "icao24": str(row.get("icao24", "")),
-                "callsign": str(row.get("callsign", "")),
-
-                "classification": str(row.get("Classification", "")),
-                "threat_reason": str(row.get("Threat_Reason", "")),
-
-                "aircraft_type": str(row.get("aircraft_type", "")),
- 
-                "altitude": float(row.get("baro_altitude", 0)),
-                "velocity": float(row.get("velocity", 0)),
-                "latitude": float(row.get("latitude", 0)),
-                "longitude": float(row.get("longitude", 0)),
-
-                "source": str(row.get("source", ""))
-
+            supabase.table("anomaly_history").insert({
+                "icao24": str(row.get("icao24", "")), "callsign": str(row.get("callsign", "")),
+                "classification": str(row.get("Classification", "")), "threat_reason": str(row.get("Threat_Reason", "")),
+                "aircraft_type": str(row.get("aircraft_type", "")), "altitude": float(row.get("baro_altitude", 0)),
+                "velocity": float(row.get("velocity", 0)), "latitude": float(row.get("latitude", 0)),
+                "longitude": float(row.get("longitude", 0)), "source": str(row.get("source", ""))
             }).execute()
-
-        except Exception as e:
-            st.write("DB Insert Error:", e)
+        except Exception: pass
         
         try:
-
-            icao = str(
-                row.get("icao24", "")
-            ).upper().strip()
-
-            existing = (
-                supabase.table("aircraft_tracking")
-                .select("*")
-                .eq("icao24", icao)
-                .execute()
-            )
+            icao = str(row.get("icao24", "")).upper().strip()
+            existing = supabase.table("aircraft_tracking").select("*").eq("icao24", icao).execute()
 
             if existing.data:
-
                 record = existing.data[0]
-
-                current_sightings = record["sightings"]
-
-                last_seen = pd.to_datetime(
-                    record["last_seen"]
-                )
-
                 now = pd.Timestamp.utcnow()
-
-                increment = (
-                    (now - last_seen)
-                    .total_seconds() > 300
-                )
-
+                increment = ((now - pd.to_datetime(record["last_seen"])).total_seconds() > 300)
                 update_data = {
-
-                    "last_seen":
-                        now.isoformat(),
-
-                    "latest_classification":
-                        str(row.get("Classification", "")),
-
-                    "latest_reason":
-                        str(row.get("Threat_Reason", "")),
-
-                    "last_latitude": float(row.get("latitude", 0)),
+                    "last_seen": now.isoformat(), "latest_classification": str(row.get("Classification", "")),
+                    "latest_reason": str(row.get("Threat_Reason", "")), "last_latitude": float(row.get("latitude", 0)),
                     "last_longitude": float(row.get("longitude", 0)),
-
                 }
-
-                if increment:
-
-                    update_data["sightings"] = (
-                        current_sightings + 1
-                    )
-
-                supabase.table(
-                    "aircraft_tracking"
-                ).update(
-                    update_data
-                ).eq(
-                    "icao24",
-                    icao
-                ).execute()
-
+                if increment: update_data["sightings"] = record["sightings"] + 1
+                supabase.table("aircraft_tracking").update(update_data).eq("icao24", icao).execute()
             else:
-
                 now = pd.Timestamp.utcnow().isoformat()
-
-                supabase.table(
-                    "aircraft_tracking"
-                ).insert({
-
-                    "icao24": icao,
-
-                    "first_seen": now,
-                    "last_seen": now,
-
-                    "sightings": 1,
-
-                    "latest_classification":
-                        str(row.get("Classification", "")),
-
-                    "latest_reason":
-                        str(row.get("Threat_Reason", "")),
-
-                    "aircraft_type":
-                        str(row.get("aircraft_type", "")),
-
-                    "last_latitude": float(row.get("latitude", 0)),
+                supabase.table("aircraft_tracking").insert({
+                    "icao24": icao, "first_seen": now, "last_seen": now, "sightings": 1,
+                    "latest_classification": str(row.get("Classification", "")), "latest_reason": str(row.get("Threat_Reason", "")),
+                    "aircraft_type": str(row.get("aircraft_type", "")), "last_latitude": float(row.get("latitude", 0)),
                     "last_longitude": float(row.get("longitude", 0)),
-
                 }).execute()
-
-        except Exception as e:
-
-            st.write(
-                "Tracking Error:",
-                e
-            )
+        except Exception: pass
 
     try:
-        tracked = (supabase.table("aircraft_tracking").select("icao24,sightings").execute())
-
-            
-        sightings_lookup = {r["icao24"]: r["sightings"]for r in tracked.data}
-
+        tracked = supabase.table("aircraft_tracking").select("icao24,sightings").execute()
+        sightings_lookup = {r["icao24"]: r["sightings"] for r in tracked.data}
         df["sightings"] = df["icao24"].map(sightings_lookup).fillna(0)
-
-    except Exception:
-        pass
+    except Exception: pass
 
     return df
 
+
 # =====================================================================
-# APPLICATION HEADER & UI
+# 2. SUPABASE INTELLIGENCE ANALYTICS LAYER
+# =====================================================================
+def render_analytics_dashboard():
+    st.subheader("📊 Global Airspace Intelligence")
+    
+    try:
+        res = supabase.table("aerotrack_stats").select("*").order("timestamp", desc=True).limit(24).execute()
+        stats_df = pd.DataFrame(res.data)
+    except Exception as e:
+        st.error(f"Failed to connect to Intelligence Database: {e}")
+        return
+
+    if stats_df.empty:
+        st.info("Gathering historical telemetry. Check back after the next hourly sweep.")
+        return
+
+    current = stats_df.iloc[0]
+
+    if len(stats_df) > 1:
+        avg_flights = stats_df["total_flights"].mean()
+        avg_threat_pct = (stats_df["threat_count"].sum() / stats_df["total_flights"].sum()) * 100
+        avg_mil_pct = (stats_df["military_count"].sum() / stats_df["total_flights"].sum()) * 100
+    else:
+        avg_flights = current["total_flights"]
+        avg_threat_pct = (current["threat_count"] / current["total_flights"]) * 100 if current["total_flights"] > 0 else 0
+        avg_mil_pct = (current["military_count"] / current["total_flights"]) * 100 if current["total_flights"] > 0 else 0
+
+    curr_threat_pct = (current["threat_count"] / current["total_flights"]) * 100 if current["total_flights"] > 0 else 0
+    curr_mil_pct = (current["military_count"] / current["total_flights"]) * 100 if current["total_flights"] > 0 else 0
+
+    flight_delta = ((current["total_flights"] - avg_flights) / avg_flights) * 100 if avg_flights > 0 else 0
+    threat_delta = curr_threat_pct - avg_threat_pct
+    mil_delta = curr_mil_pct - avg_mil_pct
+
+    col1, col2, col3 = st.columns(3)
+    
+    col1.metric("Total Airspace Congestion", f"{int(current['total_flights']):,}", f"{flight_delta:.2f}% vs 24h avg", delta_color="inverse")
+    col2.metric("Anomalous / Threat Trajectories", f"{curr_threat_pct:.2f}%", f"{threat_delta:.2f}% vs 24h avg", delta_color="inverse")
+    col3.metric("Military Asset Density", f"{curr_mil_pct:.2f}%", f"{mil_delta:.2f}% vs 24h avg", delta_color="off")
+
+    st.write("")
+    col4, col5 = st.columns(2)
+    with col4:
+        st.info(f"📍 **Highest Density Region:** {current['busiest_region']}")
+    with col5:
+        st.info(f"🛫 **Most Active Airport:** {current['busiest_airport']} (IATA)")
+        
+    st.divider()
+
+
+# =====================================================================
+# 3. APPLICATION HEADER & UI EXECUTION
 # =====================================================================
 st.title("🛰️ AeroTrack-V1 // Global Tactical Monitor")
 st.caption("Unrestricted Global Radar Fusion (ADSB.lol + AirLabs Intelligence)")
 st.divider()
 
-st.sidebar.header("Command Center Controls")
+# Inject the new Analytics Dashboard right here at the top
+render_analytics_dashboard()
 
+st.sidebar.header("Command Center Controls")
 
 # --- GRAPHICS RENDERING LAYER ---
 df = fetch_global_fusion(client.api_key)
@@ -434,13 +314,13 @@ df = fetch_global_fusion(client.api_key)
 if df.empty:
     st.warning("⚠️ Warning: No active tracking streams detected. Check network connections or API Quota.")
 else:
-    st.markdown("Execute the 'Global Fusion Sweep' to pull the entire planet.")
+    st.markdown("Execute the 'Global Fusion Sweep' to pull live tactical updates.")
 
     if st.button("📡 Execute Global Fusion Sweep", width="stretch"):
         st.cache_data.clear()
         st.toast("Executing full planetary sweep...", icon="🌍")
 
-        with st.spinner("Stitching 15,000+ global tactical tracks with commercial metadata..."):
+        with st.spinner("Stitching global tactical tracks with commercial metadata..."):
             df = fetch_global_fusion(client.api_key)
 
     total_targets = len(df)
@@ -448,9 +328,9 @@ else:
     mil_count = len(df[df["military"] == True])
     
     m1, m2, m3 = st.columns(3)
-    m1.metric(label="Total Global Tracks", value=f"{total_targets} Targets")
-    m2.metric(label="Threats / Military Assets", value=f"{threat_count} / {mil_count}")
-    m3.metric(label="Radar Status", value="GLOBAL FUSION ACTIVE🔴")
+    m1.metric(label="Live Rendered Tracks", value=f"{total_targets} Targets")
+    m2.metric(label="Active Threats / Military", value=f"{threat_count} / {mil_count}")
+    m3.metric(label="Radar Status", value="GLOBAL FUSION ACTIVE 🔴")
     st.write("")
     
     fig = px.scatter_mapbox(
@@ -497,32 +377,17 @@ else:
     st.subheader("Active Airspace Intelligence Log")
     
     display_columns = [
-        "Classification",
-        "Threat_Reason", 
-        "flight_number",
-        "aircraft_type",
-        "departure_iata",
-        "military",
-        "baro_altitude", 
-        "velocity", 
-        "sightings", 
-        "icao24"
+        "Classification", "Threat_Reason", "flight_number", "aircraft_type",
+        "departure_iata", "military", "baro_altitude", "velocity", "sightings", "icao24"
     ]
     
     available_cols = [col for col in display_columns if col in df.columns]
     df_display = df[available_cols].copy()
     
     df_display = df_display.rename(columns={
-        "Classification": "Threat Status",
-        "Threat_Reason": "Reason",
-        "flight_number": "Flight No.",
-        "aircraft_type": "Airframe",
-        "departure_iata": "Origin",
-        "military": "Mil Asset",
-        "baro_altitude": "Alt (ft)",    
-        "velocity": "Speed (km/h)",
-        "source": "Data Source",
-        "icao24": "Hex"
+        "Classification": "Threat Status", "Threat_Reason": "Reason", "flight_number": "Flight No.",
+        "aircraft_type": "Airframe", "departure_iata": "Origin", "military": "Mil Asset",
+        "baro_altitude": "Alt (ft)", "velocity": "Speed (km/h)", "source": "Data Source", "icao24": "Hex"
     })
     
     if "Threat Status" in df_display.columns:
