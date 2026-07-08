@@ -41,7 +41,7 @@ def safe_float(value, default=0.0):
     except (TypeError, ValueError): return default
 
 # =====================================================================
-# CORE ENGINE
+# CORE ENGINE (LIVE TACTICAL FEED)
 # =====================================================================
 try: client = OpenSkyClient()
 except Exception as e: st.stop()
@@ -80,7 +80,6 @@ def fetch_global_fusion(api_key):
                     "latitude": float(ac.get("lat") or 0), "longitude": float(ac.get("lng") or 0),
                     "baro_altitude": float(ac.get("alt") or 0) * 3.28084, "velocity": float(ac.get("speed") or 0),
                     "aircraft_type": str(ac.get("aircraft_icao", "UNKN")), "flight_number": str(ac.get("flight_iata", "UNKN")),
-                    "departure_iata": str(ac.get("dep_iata", "UNKN")), "airline_code": str(ac.get("airline_iata", "UNKN")),
                     "military": False
                 }
                 if hex_code in military_watchlist:
@@ -93,11 +92,8 @@ def fetch_global_fusion(api_key):
     if not mil_df.empty: df = pd.concat([df, mil_df[~mil_df["icao24"].isin(df["icao24"])]], ignore_index=True)
     if df.empty: return df
 
-    # Safe Column Assignment (Fixes AttributeError crash)
-    if "Classification" not in df.columns:
-        df["Classification"] = "CIVILIAN"
-    else:
-        df["Classification"] = df["Classification"].fillna("CIVILIAN")
+    if "Classification" not in df.columns: df["Classification"] = "CIVILIAN"
+    else: df["Classification"] = df["Classification"].fillna("CIVILIAN")
 
     df["Threat_Reason"] = ""
     biz_jets = ["GLEX", "GLF4", "GLF5", "GLF6", "CL30", "CL60", "F900", "FA7X", "C750", "E55P", "C56X"]
@@ -142,7 +138,6 @@ def fetch_global_fusion(api_key):
                 supabase.table("aircraft_tracking").insert({"icao24": icao, "first_seen": now, "last_seen": now, "sightings": 1, "latest_classification": str(row.get("Classification", ""))}).execute()
         except Exception: pass
 
-    # Merge Database Sightings into current live dataframe
     try:
         tracked = supabase.table("aircraft_tracking").select("icao24,sightings").execute()
         sightings_lookup = {r["icao24"]: r["sightings"] for r in tracked.data}
@@ -153,26 +148,64 @@ def fetch_global_fusion(api_key):
     return df
 
 # =====================================================================
+# 24-HOUR MACRO INTELLIGENCE (SUPABASE HOURLY WORKER DATA)
+# =====================================================================
+def get_macro_intelligence():
+    try:
+        res = supabase.table("aerotrack_stats").select("*").order("timestamp", desc=True).limit(24).execute()
+        stats_df = pd.DataFrame(res.data)
+        if stats_df.empty: return None
+        
+        current = stats_df.iloc[0]
+        if len(stats_df) > 1:
+            avg_flights = stats_df["total_flights"].mean()
+            avg_threat_pct = (stats_df["threat_count"].sum() / stats_df["total_flights"].sum()) * 100
+            avg_mil_pct = (stats_df["military_count"].sum() / stats_df["total_flights"].sum()) * 100
+        else:
+            avg_flights = current["total_flights"]
+            avg_threat_pct = (current["threat_count"] / current["total_flights"]) * 100 if current["total_flights"] > 0 else 0
+            avg_mil_pct = (current["military_count"] / current["total_flights"]) * 100 if current["total_flights"] > 0 else 0
+
+        curr_threat_pct = (current["threat_count"] / current["total_flights"]) * 100 if current["total_flights"] > 0 else 0
+        curr_mil_pct = (current["military_count"] / current["total_flights"]) * 100 if current["total_flights"] > 0 else 0
+
+        flight_delta = ((current["total_flights"] - avg_flights) / avg_flights) * 100 if avg_flights > 0 else 0
+        threat_delta = curr_threat_pct - avg_threat_pct
+        
+        return {
+            "density": f"{int(current['total_flights']):,}",
+            "density_delta": f"{flight_delta:+.1f}%",
+            "threat_pct": f"{curr_threat_pct:.1f}%",
+            "threat_delta": f"{threat_delta:+.1f}%",
+            "region": str(current['busiest_region']).upper(),
+            "airport": str(current['busiest_airport']).upper()
+        }
+    except Exception:
+        return None
+
+# =====================================================================
 # UI RENDERING
 # =====================================================================
 df = fetch_global_fusion(client.api_key)
+macro = get_macro_intelligence()
 
 if not df.empty:
     mil_count = len(df[df['military'] == True])
     anom_count = len(df[df['Classification'] == 'ANOMALY'])
     
+    # 1. LIVE TACTICAL HEADER
     st.markdown(f"""
-    <div style="display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid #333; padding-bottom: 15px; margin-bottom: 25px;">
+    <div style="display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 1px solid #333; padding-bottom: 10px; margin-bottom: 10px;">
         <div>
             <div style="font-size: 14px; color: #666; letter-spacing: 2px; font-weight: bold;">SYSTEM</div>
             <div style="font-size: 32px; font-weight: bold; color: #fff;">AEROTRACK_V1</div>
         </div>
         <div>
-            <div style="font-size: 14px; color: #666; letter-spacing: 2px; font-weight: bold;">ACTIVE_TRACKS</div>
+            <div style="font-size: 14px; color: #666; letter-spacing: 2px; font-weight: bold;">LIVE_TRACKS</div>
             <div style="font-size: 32px; font-weight: bold; color: #00ffcc;">{len(df):,}</div>
         </div>
         <div>
-            <div style="font-size: 14px; color: #666; letter-spacing: 2px; font-weight: bold;">MILITARY_ASSETS</div>
+            <div style="font-size: 14px; color: #666; letter-spacing: 2px; font-weight: bold;">MIL_ASSETS</div>
             <div style="font-size: 32px; font-weight: bold; color: #ffaa00;">{mil_count:,}</div>
         </div>
         <div>
@@ -185,7 +218,20 @@ if not df.empty:
     </div>
     """, unsafe_allow_html=True)
 
-    # Full-Width Map Layout (Control Panel underneath to maximize widescreen view)
+    # 2. MACRO INTELLIGENCE HEADER (24H STATS)
+    if macro:
+        st.markdown(f"""
+        <div style="display: flex; justify-content: space-between; background-color: rgba(255,255,255,0.03); padding: 10px 20px; border: 1px solid #222; margin-bottom: 25px;">
+            <div><span style="color:#666; font-size: 12px;">GLOBAL DENSITY (24H):</span> <span style="color:#fff; font-size: 16px;">{macro['density']}</span> <span style="color:{'#00ffcc' if float(macro['density_delta'].strip('%')) < 0 else '#ff3333'}; font-size: 12px;">[{macro['density_delta']}]</span></div>
+            <div><span style="color:#666; font-size: 12px;">THREAT INDEX (24H):</span> <span style="color:#fff; font-size: 16px;">{macro['threat_pct']}</span> <span style="color:{'#00ffcc' if float(macro['threat_delta'].strip('%')) < 0 else '#ff3333'}; font-size: 12px;">[{macro['threat_delta']}]</span></div>
+            <div><span style="color:#666; font-size: 12px;">PRIMARY SECTOR:</span> <span style="color:#ffaa00; font-size: 16px;">{macro['region']}</span></div>
+            <div><span style="color:#666; font-size: 12px;">ACTIVE HUB:</span> <span style="color:#ffaa00; font-size: 16px;">{macro['airport']}</span></div>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown("<div style='color: #666; font-size: 12px; margin-bottom: 25px;'>AWAITING BACKGROUND WORKER TELEMETRY...</div>", unsafe_allow_html=True)
+
+    # 3. FULL WIDTH MAP
     def assign_color(cls):
         if cls == "ANOMALY": return [255, 51, 51, 220]
         elif cls == "MILITARY": return [255, 170, 0, 220]
@@ -211,21 +257,19 @@ if not df.empty:
 
     st.pydeck_chart(pdk.Deck(layers=[layer], initial_view_state=view_state, tooltip=tooltip, map_style="mapbox://styles/mapbox/dark-v11"), use_container_width=True)
 
-    # Control Interface Row
+    # 4. CONTROL ROW
     st.write("")
     if st.button("EXECUTE SYSTEM RE-SWEEP", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
+    # 5. UNFILTERED LOG
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown("<div style='font-size: 18px; color: #fff; margin-bottom: 10px; font-weight: bold; border-bottom: 1px solid #333; padding-bottom: 5px;'>UNFILTERED RAW TELEMETRY MATRIX LOG</div>", unsafe_allow_html=True)
     
-    # --- CLEANED MASTER LOG EXPORT ---
-    # Dropped sources, vertical_rates, and headings. Sightings explicit insertion.
-    drop_cols = ["color", "vertical_rate", "source", "heading"]
+    drop_cols = ["color"]
     display_cols = [c for c in df.columns if c not in drop_cols]
     
-    # Priority structure configuration
     front_cols = ["Classification", "icao24", "callsign", "aircraft_type", "military", "sightings", "Threat_Reason"]
     for c in reversed(front_cols):
         if c in display_cols:
@@ -237,7 +281,6 @@ if not df.empty:
         df_full["_rank"] = df_full["Classification"].map({"ANOMALY": 0, "MILITARY": 1, "CIVILIAN": 2})
         df_full = df_full.sort_values(by=["_rank", "baro_altitude"], ascending=[True, False]).drop(columns=["_rank"])
 
-    # Clean display mapping renaming
     df_full.rename(columns={
         "Classification": "Status", "icao24": "Hex", "callsign": "Callsign", 
         "aircraft_type": "Airframe", "military": "Mil Asset", "sightings": "Sightings", 
