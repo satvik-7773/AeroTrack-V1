@@ -4,14 +4,21 @@ import pandas as pd
 from supabase import create_client, Client
 from datetime import datetime
 
+print("🚀 --- AEROTRACK HOURLY WORKER BOOTING ---")
+
 # --- CONFIGURATION ---
 AIRLABS_API_KEY = os.environ.get("AIRLABS_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    print("❌ CRITICAL ERROR: Supabase Keys are missing from GitHub Environment!")
+    exit(1)
+
+print("✅ Credentials loaded. Connecting to Supabase...")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def get_region(lat, lon):
-    """Categorizes coordinates into global operational theaters."""
     if 15 <= lat <= 75 and -170 <= lon <= -50: return "North America"
     elif -60 <= lat < 15 and -90 <= lon <= -30: return "South America / LATAM"
     elif 35 <= lat <= 75 and -10 <= lon <= 45: return "Europe"
@@ -25,11 +32,25 @@ def get_region(lat, lon):
 def process_hourly_sweep():
     tactical_grid = {}
 
-    # 1. Pull Unrestricted ADSB.lol
+    # 1. Pull Tactical Data
+    print("📡 STEP 1: Requesting Tactical Global Feed...")
+    headers = {"User-Agent": "AeroTrack-Analytics-Worker/1.0"}
+    
     try:
-        res = requests.get("https://api.adsb.lol/v2/all", headers={"User-Agent": "AeroTrack-Worker"}, timeout=15)
+        # Try ADSB.lol first
+        res = requests.get("https://api.adsb.lol/v2/all", headers=headers, timeout=15)
+        print(f"ADSB.lol Status Code: {res.status_code}")
+        
+        # If ADSB.lol blocks GitHub, fallback to airplanes.live
+        if res.status_code != 200:
+            print("⚠️ ADSB.lol blocked the request. Falling back to Airplanes.live...")
+            res = requests.get("https://api.airplanes.live/v2/all", headers=headers, timeout=15)
+            print(f"Airplanes.live Status Code: {res.status_code}")
+
         if res.status_code == 200:
-            for ac in res.json().get("ac", []):
+            data = res.json().get("ac", [])
+            print(f"✅ Successfully downloaded {len(data)} raw aircraft records.")
+            for ac in data:
                 hex_code = str(ac.get("hex", "UNKN")).upper()
                 if hex_code == "UNKN" or ac.get("lat") is None: continue
                 
@@ -45,29 +66,43 @@ def process_hourly_sweep():
                     "region": get_region(lat, lon),
                     "departure_iata": "UNKN"
                 }
+            print(f"✅ Parsed {len(tactical_grid)} valid positional tracks.")
+        else:
+            print("❌ FATAL: Both tactical feeds blocked the GitHub Server IP.")
+            return
+            
     except Exception as e:
-        print(f"ADSB Error: {e}")
-
-    # 2. Merge AirLabs Metadata
-    try:
-        res = requests.get(f"https://airlabs.co/api/v9/flights?api_key={AIRLABS_API_KEY}", timeout=15)
-        if res.status_code == 200:
-            for ac in res.json().get("response", []):
-                hex_code = str(ac.get("hex", "UNKN")).upper()
-                if hex_code in tactical_grid:
-                    al_type = str(ac.get("aircraft_icao", "UNKN")).strip()
-                    if al_type != "UNKN": tactical_grid[hex_code]["aircraft_type"] = al_type
-                    
-                    dep = str(ac.get("dep_iata", "UNKN")).strip()
-                    if dep != "UNKN": tactical_grid[hex_code]["departure_iata"] = dep
-    except Exception as e:
-        print(f"AirLabs Error: {e}")
-
-    df = pd.DataFrame(list(tactical_grid.values()))
-    if df.empty:
+        print(f"❌ Network Error during Tactical Fetch: {e}")
         return
 
-    # 3. KINEMATICS & THREAT DETECTION
+    # 2. Merge AirLabs
+    print("📡 STEP 2: Requesting AirLabs Intelligence Overlay...")
+    try:
+        res = requests.get(f"https://airlabs.co/api/v9/flights?api_key={AIRLABS_API_KEY}", timeout=15)
+        print(f"AirLabs Status Code: {res.status_code}")
+        if res.status_code == 200:
+            al_data = res.json().get("response", [])
+            print(f"✅ Successfully downloaded {len(al_data)} civilian records.")
+            matches = 0
+            for ac in al_data:
+                hex_code = str(ac.get("hex", "UNKN")).upper()
+                if hex_code in tactical_grid:
+                    matches += 1
+                    al_type = str(ac.get("aircraft_icao", "UNKN")).strip()
+                    if al_type != "UNKN": tactical_grid[hex_code]["aircraft_type"] = al_type
+                    dep = str(ac.get("dep_iata", "UNKN")).strip()
+                    if dep != "UNKN": tactical_grid[hex_code]["departure_iata"] = dep
+            print(f"✅ Successfully merged AirLabs data into {matches} active tracks.")
+    except Exception as e:
+        print(f"⚠️ AirLabs Fetch Error (Continuing without metadata): {e}")
+
+    # 3. Process Dataframe
+    df = pd.DataFrame(list(tactical_grid.values()))
+    if df.empty:
+        print("❌ FATAL: DataFrame is empty. Aborting Supabase upload.")
+        return
+
+    print("🧠 STEP 3: Executing Kinematic Threat Detection...")
     df["is_threat"] = False
     biz_jets = ["GLEX", "GLF4", "GLF5", "GLF6", "CL30", "CL60", "FA7X"]
     
@@ -81,19 +116,21 @@ def process_hourly_sweep():
         except:
             pass
 
-    # 4. AGGREGATE THE INTELLIGENCE
+    # 4. Math & Aggregation
+    print("🧮 STEP 4: Aggregating Global Statistics...")
     total_flights = len(df)
     threat_count = int(df["is_threat"].sum())
     mil_count = int(df["military"].sum())
     
-    # Calculate Busiest Airport (Excluding UNKN)
     known_airports = df[df["departure_iata"] != "UNKN"]["departure_iata"]
     busiest_airport = known_airports.mode()[0] if not known_airports.empty else "N/A"
-    
-    # Calculate Busiest Region
     busiest_region = df["region"].mode()[0] if not df.empty else "N/A"
 
-    # 5. PUSH SUMMARY TO SUPABASE
+    print(f"📊 SUMMARY: {total_flights} Flights | {threat_count} Threats | {mil_count} Military")
+    print(f"📍 Busiest Region: {busiest_region} | 🛫 Busiest Airport: {busiest_airport}")
+
+    # 5. Supabase Upload
+    print("☁️ STEP 5: Pushing payload to Supabase...")
     stats_payload = {
         "timestamp": datetime.utcnow().isoformat(),
         "total_flights": total_flights,
@@ -103,10 +140,11 @@ def process_hourly_sweep():
         "busiest_region": busiest_region
     }
     
-    supabase.table("aerotrack_stats").insert(stats_payload).execute()
-    
-    # (Optional) You can still push the individual threat rows to your aerotrack_logs table here 
-    # to maintain the "sightings" feature without filling up your database with all 15k commercial flights.
+    try:
+        response = supabase.table("aerotrack_stats").insert(stats_payload).execute()
+        print("🎉 SUCCESS! Data safely written to Supabase.")
+    except Exception as e:
+        print(f"❌ FATAL: Supabase rejected the insert command. Error: {e}")
 
 if __name__ == "__main__":
     process_hourly_sweep()
