@@ -8,5 +8,4 @@ streamlit
 plotly
 curl-cffi
 supabase==2.10.0
-gotrue==2.9.0
 httpx>=0.24.0,<0.28.0
