@@ -94,7 +94,10 @@ def fetch_global_fusion(api_key):
     if not mil_df.empty: df = pd.concat([df, mil_df[~mil_df["icao24"].isin(df["icao24"])]], ignore_index=True)
     if df.empty: return df
 
-    df["Classification"] = df.get("Classification", "CIVILIAN").fillna("CIVILIAN")
+    if "Classification" not in df.columns:
+        df["Classification"] = "CIVILIAN"
+    else:
+        df["Classification"] = df["Classification"].fillna("CIVILIAN")
     df["Threat_Reason"] = ""
     biz_jets = ["GLEX", "GLF4", "GLF5", "GLF6", "CL30", "CL60", "F900", "FA7X", "C750", "E55P", "C56X"]
    
