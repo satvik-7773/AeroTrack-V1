@@ -32,50 +32,48 @@ def get_region(lat, lon):
 def process_hourly_sweep():
     tactical_grid = {}
 
-    # 1. Pull Tactical Data
-    print("📡 STEP 1: Requesting Tactical Global Feed...")
-    headers = {"User-Agent": "AeroTrack-Analytics-Worker/1.0"}
-    
+    # 1. Pull Tactical Data from OpenSky Network
+    print("📡 STEP 1: Requesting Tactical Global Feed (OpenSky)...")
     try:
-        # Try ADSB.lol first
-        res = requests.get("https://api.adsb.lol/v2/all", headers=headers, timeout=15)
-        print(f"ADSB.lol Status Code: {res.status_code}")
+        res = requests.get("https://opensky-network.org/api/states/all", timeout=20)
+        print(f"OpenSky Status Code: {res.status_code}")
         
-        # If ADSB.lol blocks GitHub, fallback to airplanes.live
-        if res.status_code != 200:
-            print("⚠️ ADSB.lol blocked the request. Falling back to Airplanes.live...")
-            res = requests.get("https://api.airplanes.live/v2/all", headers=headers, timeout=15)
-            print(f"Airplanes.live Status Code: {res.status_code}")
-
         if res.status_code == 200:
-            data = res.json().get("ac", [])
+            data = res.json().get("states", [])
             print(f"✅ Successfully downloaded {len(data)} raw aircraft records.")
             for ac in data:
-                hex_code = str(ac.get("hex", "UNKN")).upper()
-                if hex_code == "UNKN" or ac.get("lat") is None: continue
+                # OpenSky format: [icao24, callsign, origin_country, time_pos, last_contact, lon, lat, baro_alt, on_ground, velocity, true_track, vertical_rate]
+                hex_code = str(ac[0]).upper() if ac[0] else "UNKN"
+                lon = ac[5]
+                lat = ac[6]
                 
-                lat, lon = float(ac.get("lat")), float(ac.get("lon"))
+                if hex_code == "UNKN" or lat is None or lon is None: 
+                    continue
+                
+                velocity_ms = float(ac[9]) if ac[9] is not None else 0.0
+                altitude_m = float(ac[7]) if ac[7] is not None else 0.0
+                
                 tactical_grid[hex_code] = {
                     "icao24": hex_code,
-                    "latitude": lat,
-                    "longitude": lon,
-                    "altitude": float(ac.get("alt_baro", 0.0)) if isinstance(ac.get("alt_baro"), (int, float)) else 0.0,
-                    "velocity": float(ac.get("gs", 0.0)) * 1.852,
-                    "military": True if ac.get("mil", False) else False,
-                    "aircraft_type": str(ac.get("t", "UNKN")).strip(),
-                    "region": get_region(lat, lon),
+                    "latitude": float(lat),
+                    "longitude": float(lon),
+                    "altitude": altitude_m * 3.28084, # Convert meters to feet
+                    "velocity": velocity_ms * 3.6, # Convert m/s to km/h
+                    "military": False, # OpenSky doesn't tag military, we rely on kinematics
+                    "aircraft_type": "UNKN",
+                    "region": get_region(float(lat), float(lon)),
                     "departure_iata": "UNKN"
                 }
             print(f"✅ Parsed {len(tactical_grid)} valid positional tracks.")
         else:
-            print("❌ FATAL: Both tactical feeds blocked the GitHub Server IP.")
+            print("❌ FATAL: OpenSky feed blocked or unavailable.")
             return
             
     except Exception as e:
         print(f"❌ Network Error during Tactical Fetch: {e}")
         return
 
-    # 2. Merge AirLabs
+    # 2. Merge AirLabs Metadata
     print("📡 STEP 2: Requesting AirLabs Intelligence Overlay...")
     try:
         res = requests.get(f"https://airlabs.co/api/v9/flights?api_key={AIRLABS_API_KEY}", timeout=15)
@@ -109,9 +107,10 @@ def process_hourly_sweep():
     for idx, row in df.iterrows():
         try:
             vel, alt = row["velocity"], row["altitude"]
+            # Kinematic flags for anomalies (low alt/high speed or ceiling breaches)
             if (alt < 15000 and vel > 850) or \
                (alt > (51000 if row["aircraft_type"] in biz_jets else 44000)) or \
-               (vel > 1250) or (vel > 1050 and alt < 28000) or row["military"]:
+               (vel > 1250) or (vel > 1050 and alt < 28000):
                 df.at[idx, "is_threat"] = True
         except:
             pass
