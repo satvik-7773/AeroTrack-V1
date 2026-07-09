@@ -10,10 +10,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4 # UPDATED to v4 to fix Node warning
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5 # UPDATED to v5 to fix Node warning
+        uses: actions/setup-python@v5 
         with:
           python-version: '3.10'
 
@@ -34,3 +34,8 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python dashboard/worker.py
+
+      - name: Keep Streamlit Awake 
+        run: |
+          curl -s "https://aerotrack-v1.streamlit.app" > /dev/null
+          echo "Streamlit pinged to prevent sleep."
