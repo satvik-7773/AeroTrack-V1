@@ -160,5 +160,10 @@ def process_hourly_sweep():
     except Exception as e:
         print(f"❌ Database Write Rejection: {e}")
 
+- name: Keep Streamlit Awake (Heartbeat Ping)
+  run: |
+    curl -s "https://aerotrack-v1.streamlit.app" > /dev/null
+    echo "Streamlit pinged to prevent sleep."
+
 if __name__ == "__main__":
     process_hourly_sweep()
