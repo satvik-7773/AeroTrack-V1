@@ -131,7 +131,7 @@ def process_hourly_sweep():
         "busiest_region": busiest_region,
         "top_carrier": top_carrier,
         "top_carrier_count": top_carrier_count,
-        "top_global_airframe": top_frame,
+        "top_frame": top_frame,
         "top_frame_count": top_frame_count
     }
 
