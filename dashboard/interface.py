@@ -62,9 +62,11 @@ def fetch_global_fusion(api_key):
     tactical_grid = {}
     military_watchlist = {}
     military_tracks = []
+    
+    fallback_mil_icaos = {"AFX", "RRR", "CNV", "CFC", "GAF", "RFF", "ASY", "FCE", "AME", "IAM", "BAF", "NAF", "SVF", "SUI", "PLF", "ROF", "HAF", "TUAF", "MMF"}
 
     try:
-        res = requests.get("https://api.adsb.lol/v2/mil", headers={"User-Agent": "AeroTrack/1.0"}, timeout=15)
+        res = requests.get("https://api.adsb.lol/v2/mil", headers={"User-Agent": "AeroTrack/1.1"}, timeout=15)
         if res.status_code == 200:
             for ac in res.json().get("ac", []):
                 hex_code = str(ac.get("hex", "")).upper().strip()
@@ -84,15 +86,20 @@ def fetch_global_fusion(api_key):
             try:
                 hex_code = str(ac.get("hex", "UNKN")).upper().strip()
                 if hex_code == "UNKN" or ac.get("lat") is None or ac.get("lng") is None: continue
+                
+                airline_icao = str(ac.get("airline_icao", "UNKN")).upper().strip()
+                is_mil = (hex_code in military_watchlist) or (airline_icao in fallback_mil_icaos)
+                
                 tactical_grid[hex_code] = {
                     "icao24": hex_code, "callsign": str(ac.get("flight_iata", "UNKN")).strip(),
                     "latitude": float(ac.get("lat") or 0), "longitude": float(ac.get("lng") or 0),
                     "baro_altitude": float(ac.get("alt") or 0) * 3.28084, "velocity": float(ac.get("speed") or 0),
                     "aircraft_type": str(ac.get("aircraft_icao", "UNKN")).upper().strip(), "flight_number": str(ac.get("flight_number", "UNKN")), 
-                    "airline_code": str(ac.get("airline_iata", "UNKN")).upper().strip(), "military": False, "Classification": "CIVILIAN"
+                    "airline_code": str(ac.get("airline_iata", "UNKN")).upper().strip(), "military": is_mil, "Classification": "MILITARY" if is_mil else "CIVILIAN"
                 }
-                if hex_code in military_watchlist:
-                    tactical_grid[hex_code].update({"military": True, "aircraft_type": military_watchlist[hex_code].get("aircraft_type", "UNKN"), "airline_code": "MIL", "Classification": "MILITARY", "flight_number": "MIL-OPS"})
+                
+                if is_mil and hex_code in military_watchlist:
+                    tactical_grid[hex_code].update({"aircraft_type": military_watchlist[hex_code].get("aircraft_type", "UNKN"), "airline_code": "MIL", "flight_number": "MIL-OPS"})
             except Exception: continue
     except Exception: pass
 
