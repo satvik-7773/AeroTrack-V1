@@ -114,6 +114,13 @@ def process_hourly_sweep():
     valid_airports = df[(df["departure_iata"].str.upper() != "UNKN") & (df["departure_iata"] != "")]
     busiest_airport = str(valid_airports["departure_iata"].mode()[0]).upper() if not valid_airports.empty else "DFW"
     busiest_region = str(df["sector"].mode()[0]) if not df["sector"].empty else "NORTH ATLANTIC TRACKS"
+    clean_airlines = df[~df["airline_code"].isin(["UNKN", ""])]
+    top_carrier = str(clean_airlines["airline_code"].mode()[0]) if not clean_airlines.empty else "UNKN"
+    top_carrier_count = int(clean_airlines["airline_code"].value_counts().max()) if not clean_airlines.empty else 0
+    
+    clean_frames = df[~df["aircraft_type"].isin(["UNKN", ""])]
+    top_frame = str(clean_frames["aircraft_type"].mode()[0]) if not clean_frames.empty else "UNKN"
+    top_frame_count = int(clean_frames["aircraft_type"].value_counts().max()) if not clean_frames.empty else 0
 
     stats_payload = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -121,8 +128,14 @@ def process_hourly_sweep():
         "threat_count": len(df[df["Classification"] == "ANOMALY"]),
         "military_count": len(df[df["military"] == True]),
         "busiest_airport": busiest_airport,
-        "busiest_region": busiest_region
+        "busiest_region": busiest_region,
+        "top_carrier": top_carrier,
+        "top_carrier_count": top_carrier_count,
+        "top_global_airframe": top_frame,
+        "top_frame_count": top_frame_count
     }
+
+    
 
     try:
         supabase.table("aerotrack_stats").insert(stats_payload).execute()
