@@ -11,23 +11,18 @@ from supabase import create_client
 # =====================================================================
 # INITIALIZATION & STATIC MAPS
 # =====================================================================
-st.set_page_config(page_title="AeroTrack // Root", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="AeroTrack // Intelligence", layout="wide", initial_sidebar_state="collapsed")
 
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Static Airport Map for the Macro Intelligence Header
 AIRPORT_MAP = {
     "ATL": "Atlanta", "DFW": "Dallas", "DEN": "Denver", "ORD": "Chicago", "LAX": "Los Angeles", 
     "JFK": "New York", "LHR": "London", "HND": "Tokyo", "CDG": "Paris", "DXB": "Dubai", 
     "DEL": "New Delhi", "BOM": "Mumbai", "FRA": "Frankfurt", "AMS": "Amsterdam", "MAD": "Madrid",
     "SIN": "Singapore", "HKG": "Hong Kong", "SYD": "Sydney", "YYZ": "Toronto", "IST": "Istanbul"
 }
-
-@st.cache_resource
-def init_radar_memory():
-    return {}
 
 st.markdown("""
     <style>
@@ -53,7 +48,7 @@ def safe_float(value, default=0.0):
 try: client = OpenSkyClient()
 except Exception as e: st.stop()
 
-@st.cache_data(ttl=86400) # Caches the dictionary for 24 hours to save API calls
+@st.cache_data(ttl=86400) 
 def fetch_dynamic_airline_map(api_key):
     try:
         res = requests.get(f"https://airlabs.co/api/v9/airlines?api_key={api_key}", timeout=15)
@@ -69,9 +64,6 @@ def fetch_global_fusion(api_key):
     tactical_grid = {}
     military_watchlist = {}
     military_tracks = []
-    
-    radar_memory = init_radar_memory()
-    now_ts = pd.Timestamp.utcnow().timestamp()
 
     # ADSB.LOL MILITARY
     try:
@@ -85,8 +77,7 @@ def fetch_global_fusion(api_key):
                     "icao24": hex_code, "callsign": str(ac.get("flight", "")).strip(),
                     "latitude": float(ac.get("lat") or 0), "longitude": float(ac.get("lon") or 0),
                     "baro_altitude": safe_float(ac.get("alt_baro")), "velocity": safe_float(ac.get("gs")) * 1.852,
-                    "heading": safe_float(ac.get("track")), "aircraft_type": str(ac.get("t", "")), 
-                    "airline_code": "MIL", "military": True, "Classification": "MILITARY"
+                    "aircraft_type": str(ac.get("t", "")), "airline_code": "MIL", "military": True, "Classification": "MILITARY"
                 })
     except Exception: pass
 
@@ -101,9 +92,8 @@ def fetch_global_fusion(api_key):
                     "icao24": hex_code, "callsign": str(ac.get("flight_iata", "UNKN")).strip(),
                     "latitude": float(ac.get("lat") or 0), "longitude": float(ac.get("lng") or 0),
                     "baro_altitude": float(ac.get("alt") or 0) * 3.28084, "velocity": float(ac.get("speed") or 0),
-                    "heading": float(ac.get("dir") or 0), "aircraft_type": str(ac.get("aircraft_icao", "UNKN")), 
-                    "flight_number": str(ac.get("flight_iata", "UNKN")), "airline_code": str(ac.get("airline_iata", "UNKN")),
-                    "military": False
+                    "aircraft_type": str(ac.get("aircraft_icao", "UNKN")), "flight_number": str(ac.get("flight_iata", "UNKN")), 
+                    "airline_code": str(ac.get("airline_iata", "UNKN")), "military": False
                 }
                 if hex_code in military_watchlist:
                     tactical_grid[hex_code].update({
@@ -122,7 +112,7 @@ def fetch_global_fusion(api_key):
     if "Classification" not in df.columns: df["Classification"] = "CIVILIAN"
     else: df["Classification"] = df["Classification"].fillna("CIVILIAN")
 
-    df["Threat_Reason"] = ""
+    df["Alert_Reason"] = ""
     
     biz_jets = [
         "GLEX", "GLF4", "GLF5", "GLF6", "GLF7", "GLF8", "GL5T", "GL7T", "G280", "G150", 
@@ -133,34 +123,19 @@ def fetch_global_fusion(api_key):
    
     for idx, row in df.iterrows():
         try:
-            vel, alt, heading, ac_type, icao, is_mil = float(row.get("velocity", 0.0)), float(row.get("baro_altitude", 0.0)), float(row.get("heading", 0.0)), str(row.get("aircraft_type", "")).upper(), str(row.get("icao24", "")), row.get("military", False)
-            reasons = []
+            vel, alt, ac_type, is_mil = float(row.get("velocity", 0.0)), float(row.get("baro_altitude", 0.0)), str(row.get("aircraft_type", "")).upper(), row.get("military", False)
+            flags = []
             
-            # --- 1. ABSOLUTE KINEMATICS ---
-            if (alt < 15000 and vel > 850): reasons.append("LOW-ALT/HI-VEL")
-            if (alt > (49000 if ac_type in biz_jets else 45000)): reasons.append("CEILING-BREACH")
-            if (vel > 1250) or (vel > 1050 and alt < 28000): reasons.append("OVER-SPEED")
-            if (alt > 30000 and vel < 20): reasons.append("TELEMETRY ANOMALY")
+            # --- STATIC KINEMATIC ALERTS ---
+            if (alt < 15000 and vel > 850): flags.append("LOW-ALT/HI-VEL")
+            if (alt > (49000 if ac_type in biz_jets else 45000)): flags.append("CEILING-BREACH")
+            if (vel > 1250) or (vel > 1050 and alt < 28000): flags.append("OVER-SPEED")
+            if (alt > 30000 and vel < 20): flags.append("TELEMETRY ANOMALY")
             
-            # --- 2. DELTA KINEMATICS ---
-            if icao in radar_memory:
-                last_data = radar_memory[icao]
-                time_delta = now_ts - last_data['ts']
-                
-                if 10 < time_delta < 120:
-                    h_diff = abs((heading - last_data['heading'] + 180) % 360 - 180)
-                    v_diff = vel - last_data['velocity']
-                    
-                    if h_diff > 35 and vel > 300: reasons.append(f"HIGH-G-TURN ({int(h_diff)}°)")
-                    if v_diff > 300: reasons.append("HARD-ACCEL")
-                    elif v_diff < -400 and alt > 5000: reasons.append("HARD-DECEL")
-
-            radar_memory[icao] = {'heading': heading, 'velocity': vel, 'ts': now_ts}
-
-            # --- 3. THE HIERARCHY FIX ---
-            if reasons: 
-                df.at[idx, "Threat_Reason"] = " | ".join(reasons)
-                df.at[idx, "Classification"] = "ANOMALY" 
+            # --- HIERARCHY ALGORITHM ---
+            if flags: 
+                df.at[idx, "Alert_Reason"] = " | ".join(flags)
+                df.at[idx, "Classification"] = "FLAGGED" 
             elif is_mil: 
                 df.at[idx, "Classification"] = "MILITARY"
                   
@@ -203,8 +178,8 @@ def get_macro_intelligence():
         return {
             "density": f"{int(current['total_flights']):,}",
             "density_delta": f"{flight_delta:+.1f}%",
-            "threat_pct": f"{curr_threat_pct:.1f}%",
-            "threat_delta": f"{threat_delta:+.1f}%",
+            "alert_pct": f"{curr_threat_pct:.1f}%",
+            "alert_delta": f"{threat_delta:+.1f}%",
             "region": str(current['busiest_region']).upper(),
             "airport": airport_display
         }
@@ -219,7 +194,7 @@ macro = get_macro_intelligence()
 
 if not df.empty:
     mil_count = len(df[df['military'] == True])
-    anom_count = len(df[df['Classification'] == 'ANOMALY'])
+    flagged_count = len(df[df['Classification'] == 'FLAGGED'])
     
     # 1. LIVE TACTICAL HEADER
     st.markdown(f"""
@@ -229,7 +204,7 @@ if not df.empty:
             <div style="font-size: 32px; font-weight: bold; color: #fff;">AEROTRACK_V1</div>
         </div>
         <div>
-            <div style="font-size: 14px; color: #666; letter-spacing: 2px; font-weight: bold;">LIVE_TRACKS</div>
+            <div style="font-size: 14px; color: #666; letter-spacing: 2px; font-weight: bold;">ACTIVE_TRACKS</div>
             <div style="font-size: 32px; font-weight: bold; color: #00ffcc;">{len(df):,}</div>
         </div>
         <div>
@@ -237,8 +212,8 @@ if not df.empty:
             <div style="font-size: 32px; font-weight: bold; color: #ffaa00;">{mil_count:,}</div>
         </div>
         <div>
-            <div style="font-size: 14px; color: #666; letter-spacing: 2px; font-weight: bold;">ANOMALIES</div>
-            <div style="font-size: 32px; font-weight: bold; color: #ff3333;">{anom_count:,}</div>
+            <div style="font-size: 14px; color: #666; letter-spacing: 2px; font-weight: bold;">FLAGGED_ASSETS</div>
+            <div style="font-size: 32px; font-weight: bold; color: #ff3333;">{flagged_count:,}</div>
         </div>
         <div style="font-size: 14px; color: #555; text-align: right; line-height: 1.5;">
             DATA: ADSB.LOL + AIRLABS<br>AUTH: SATVIK-7773
@@ -251,7 +226,7 @@ if not df.empty:
         st.markdown(f"""
         <div style="display: flex; justify-content: space-between; background-color: rgba(255,255,255,0.03); padding: 10px 20px; border: 1px solid #222; margin-bottom: 25px;">
             <div><span style="color:#666; font-size: 12px;">GLOBAL DENSITY (24H):</span> <span style="color:#fff; font-size: 16px;">{macro['density']}</span> <span style="color:{'#00ffcc' if float(macro['density_delta'].strip('%')) < 0 else '#ff3333'}; font-size: 12px;">[{macro['density_delta']}]</span></div>
-            <div><span style="color:#666; font-size: 12px;">THREAT INDEX (24H):</span> <span style="color:#fff; font-size: 16px;">{macro['threat_pct']}</span> <span style="color:{'#00ffcc' if float(macro['threat_delta'].strip('%')) < 0 else '#ff3333'}; font-size: 12px;">[{macro['threat_delta']}]</span></div>
+            <div><span style="color:#666; font-size: 12px;">FLAG RATE (24H):</span> <span style="color:#fff; font-size: 16px;">{macro['alert_pct']}</span> <span style="color:{'#00ffcc' if float(macro['alert_delta'].strip('%')) < 0 else '#ff3333'}; font-size: 12px;">[{macro['alert_delta']}]</span></div>
             <div><span style="color:#666; font-size: 12px;">HIGHEST AIR TRAFFIC:</span> <span style="color:#ffaa00; font-size: 16px;">{macro['region']}</span></div>
             <div><span style="color:#666; font-size: 12px;">BUSIEST AIRPORT:</span> <span style="color:#ffaa00; font-size: 16px;">{macro['airport']}</span></div>
         </div>
@@ -261,7 +236,7 @@ if not df.empty:
 
     # 3. FULL WIDTH MAP
     def assign_color(cls):
-        if cls == "ANOMALY": return [255, 51, 51, 220]
+        if cls == "FLAGGED": return [255, 51, 51, 220]
         elif cls == "MILITARY": return [255, 170, 0, 220]
         return [0, 255, 204, 80]
 
@@ -293,12 +268,12 @@ if not df.empty:
 
     # 5. UNFILTERED LOG
     st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown("<div style='font-size: 18px; color: #fff; margin-bottom: 10px; font-weight: bold; border-bottom: 1px solid #333; padding-bottom: 5px;'>UNFILTERED RAW TELEMETRY MATRIX LOG</div>", unsafe_allow_html=True)
+    st.markdown("<div style='font-size: 18px; color: #fff; margin-bottom: 10px; font-weight: bold; border-bottom: 1px solid #333; padding-bottom: 5px;'>AIRSPACE INTELLIGENCE MATRIX LOG</div>", unsafe_allow_html=True)
     
-    drop_cols = ["color", "heading"] 
+    drop_cols = ["color"] 
     display_cols = [c for c in df.columns if c not in drop_cols]
     
-    front_cols = ["Classification", "icao24", "callsign", "airline_code", "aircraft_type", "military", "sightings", "Threat_Reason"]
+    front_cols = ["Classification", "icao24", "callsign", "airline_code", "aircraft_type", "military", "sightings", "Alert_Reason"]
     for c in reversed(front_cols):
         if c in display_cols:
             display_cols.insert(0, display_cols.pop(display_cols.index(c)))
@@ -306,13 +281,13 @@ if not df.empty:
     df_full = df[display_cols].copy()
     
     if "Classification" in df_full.columns:
-        df_full["_rank"] = df_full["Classification"].map({"ANOMALY": 0, "MILITARY": 1, "CIVILIAN": 2})
+        df_full["_rank"] = df_full["Classification"].map({"FLAGGED": 0, "MILITARY": 1, "CIVILIAN": 2})
         df_full = df_full.sort_values(by=["_rank", "baro_altitude"], ascending=[True, False]).drop(columns=["_rank"])
 
     df_full.rename(columns={
         "Classification": "Status", "icao24": "Hex", "callsign": "Callsign", 
         "airline_code": "Carrier", "aircraft_type": "Airframe", "military": "Mil Asset", "sightings": "Sightings", 
-        "Threat_Reason": "Flags", "baro_altitude": "Alt (ft)", "velocity": "Speed (km/h)"
+        "Alert_Reason": "Flags", "baro_altitude": "Alt (ft)", "velocity": "Speed (km/h)"
     }, inplace=True)
 
     # --- DYNAMIC AIRLINE INJECTION ---
