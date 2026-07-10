@@ -70,7 +70,7 @@ def process_hourly_sweep():
                     "baro_altitude": float(ac.get("alt") or 0) * 3.28084, "velocity": float(ac.get("speed") or 0),
                     "airframe": str(ac.get("aircraft_icao", "UNKN")).upper().strip(), 
                     "airline": str(ac.get("airline_iata", "UNKN")).upper().strip(),   
-                    "dep": str(ac.get("dep_iata", "UNKN")).upper().strip())
+                    "dep": str(ac.get("dep_iata", "UNKN")).upper().strip()
                 }
                 
                 if hex_code in military_watchlist:
