@@ -84,13 +84,23 @@ def process_hourly_sweep():
         "dep": "departure_iata"
     })
     mil_df = pd.DataFrame(military_tracks)
-    df = df.drop_duplicates(subset=["icao24"])
-    mil_df = mil_df.drop_duplicates(subset=["icao24"])
+   # 1. Clean both dataframes
+    df = pd.DataFrame(list(tactical_grid.values())).drop_duplicates(subset=["icao24"])
+    mil_df = pd.DataFrame(military_tracks).drop_duplicates(subset=["icao24"])
+
+    # 2. Standardize column sets
+    # Identify common columns
+    common_cols = ["icao24", "latitude", "longitude", "baro_altitude", "velocity", "aircraft_type", "military", "Classification"]
     
-    if not mil_df.empty: 
-        # Only add military tracks that aren't already in the civilian list
+    # Subset both to ensure they have the exact same structure
+    df = df.reindex(columns=common_cols)
+    mil_df = mil_df.reindex(columns=common_cols)
+
+    # 3. Perform the merge safely
+    if not mil_df.empty:
+        # Only keep rows from mil_df that aren't in df
         new_mil_tracks = mil_df[~mil_df["icao24"].isin(df["icao24"])]
-        df = pd.concat([df, new_mil_tracks], ignore_index=True)
+        df = pd.concat([df, new_mil_tracks], axis=0, ignore_index=True)
 
     if "Classification" not in df.columns: df["Classification"] = "CIVILIAN"
     else: df["Classification"] = df["Classification"].fillna("CIVILIAN")
