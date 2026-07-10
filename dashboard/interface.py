@@ -89,7 +89,7 @@ def fetch_global_fusion(api_key):
                     "latitude": float(ac.get("lat") or 0), "longitude": float(ac.get("lng") or 0),
                     "baro_altitude": float(ac.get("alt") or 0) * 3.28084, "velocity": float(ac.get("speed") or 0),
                     "aircraft_type": str(ac.get("aircraft_icao", "UNKN")).upper().strip(), "flight_number": str(ac.get("flight_number", "UNKN")), 
-                    "airline": str(ac.get("airline_iata", "UNKN")).upper().strip(), "military": False, "Classification": "CIVILIAN"
+                    "airline_code": str(ac.get("airline_iata", "UNKN")).upper().strip(), "military": False, "Classification": "CIVILIAN"
                 }
                 if hex_code in military_watchlist:
                     tactical_grid[hex_code].update({"military": True, "aircraft_type": military_watchlist[hex_code].get("aircraft_type", "UNKN"), "airline_code": "MIL", "Classification": "MILITARY", "flight_number": "MIL-OPS"})
@@ -132,7 +132,7 @@ def fetch_global_fusion(api_key):
     return df
 
 @st.cache_data(ttl=30)
-def get_macro_intelligence():
+def get_macro_intelligence(_airline_map):
     try:
         res = supabase.table("aerotrack_stats").select("*").order("timestamp", desc=True).limit(24).execute()
         stats_df = pd.DataFrame(res.data)
@@ -158,6 +158,9 @@ def get_macro_intelligence():
         raw_apt = str(current.get('busiest_airport', 'DFW')).upper()
         apt_txt = f"{raw_apt} ({AIRPORT_MAP.get(raw_apt, 'Intl Hub')})"
         
+        carrier_code = str(current.get('top_carrier', 'UNKN')).upper()
+        full_carrier_name = _airline_map.get(carrier_code, carrier_code)
+        
         return {
             "density": f"{int(current.get('total_flights', 0)):,}",
             "density_delta": f"{flight_delta:+.1f}%",
@@ -167,11 +170,10 @@ def get_macro_intelligence():
             "mil_delta": f"{mil_delta:+.1f}%",
             "region": str(current.get('busiest_region', 'NORTH AMERICAN SECTOR')).upper(),
             "airport": apt_txt,
-            "top_carrier": str(current.get('top_carrier', 'UNKN')).upper(),
+            "top_carrier": f"{full_carrier_name} ({carrier_code})",
             "top_carrier_count": int(current.get('top_carrier_count', 0)),
-            "top_frame": str(current.get('top_global_airframe', 'UNKN')).upper(),
+            "top_frame": str(current.get('top_frame', 'UNKN')).upper(),
             "top_frame_count": int(current.get('top_frame_count', 0))
-        
         }
     except Exception: return None
 
@@ -182,7 +184,7 @@ dynamic_airline_map = fetch_dynamic_airline_map(client.api_key)
 dynamic_airline_map["MIL"] = "Military Asset"
 
 df = fetch_global_fusion(client.api_key)
-macro = get_macro_intelligence()
+macro = get_macro_intelligence(dynamic_airline_map)
 
 if not df.empty:
     mil_count = len(df[df['military'] == True])
@@ -228,8 +230,6 @@ if not df.empty:
             <div><span style="color:#666; font-size: 12px;">GLOBAL AIRFRAME STANDARD:</span> <br><span style="color:#fff; font-size: 16px; font-weight:bold;">{macro['top_frame']}</span> <span style="color:#00ffcc; font-size: 12px;">({macro['top_frame_count']} units deployed)</span></div>
         </div>
         """, unsafe_allow_html=True)
-
-    
 
     def assign_color(cls):
         if cls == "ANOMALY": return [255, 51, 51, 220]
