@@ -5,11 +5,12 @@ import requests
 import streamlit as st
 import pandas as pd
 import pydeck as pdk
+import time
 from data_ingestion.client import OpenSkyClient
 from supabase import create_client
 
 # =====================================================================
-# INITIALIZATION
+# INITIALIZATION & STATE MEMORY
 # =====================================================================
 st.set_page_config(page_title="AeroTrack // Root", layout="wide", initial_sidebar_state="collapsed")
 
@@ -17,21 +18,21 @@ SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# --- TERMINAL AESTHETIC GRAPHICS CONFIG ---
+# Persist radar state across reruns for Delta kinematics
+@st.cache_resource
+def init_radar_memory():
+    return {}
+
 st.markdown("""
     <style>
     #MainMenu, footer, header {visibility: hidden;}
     .block-container { padding: 1.5rem 2rem; max-width: 100%; }
     .main { background-color: #000000; color: #e0e0e0; font-family: 'SF Mono', Consolas, monospace; }
-    
-    /* Action Controls */
     div.stButton > button:first-child {
         background-color: transparent; color: #fff; border: 2px solid #333; 
         border-radius: 0px; font-family: inherit; font-size: 15px; font-weight: bold; height: 45px;
     }
     div.stButton > button:first-child:hover { border-color: #fff; color: #fff; background: rgba(255,255,255,0.1); }
-    
-    /* Clean Logs Layout */
     .stDataFrame { border: none !important; font-size: 16px !important; }
     </style>
     """, unsafe_allow_html=True)
@@ -41,7 +42,7 @@ def safe_float(value, default=0.0):
     except (TypeError, ValueError): return default
 
 # =====================================================================
-# CORE ENGINE (LIVE TACTICAL FEED)
+# CORE ENGINE (PURE READ-ONLY TACTICAL CALCULATOR)
 # =====================================================================
 try: client = OpenSkyClient()
 except Exception as e: st.stop()
@@ -51,6 +52,9 @@ def fetch_global_fusion(api_key):
     tactical_grid = {}
     military_watchlist = {}
     military_tracks = []
+    
+    radar_memory = init_radar_memory()
+    now_ts = pd.Timestamp.utcnow().timestamp()
 
     # ADSB.LOL MILITARY
     try:
@@ -64,7 +68,8 @@ def fetch_global_fusion(api_key):
                     "icao24": hex_code, "callsign": str(ac.get("flight", "")).strip(),
                     "latitude": float(ac.get("lat") or 0), "longitude": float(ac.get("lon") or 0),
                     "baro_altitude": safe_float(ac.get("alt_baro")), "velocity": safe_float(ac.get("gs")) * 1.852,
-                    "aircraft_type": str(ac.get("t", "")), "military": True, "Classification": "MILITARY"
+                    "heading": safe_float(ac.get("track")), "aircraft_type": str(ac.get("t", "")), 
+                    "airline_code": "MIL", "military": True, "Classification": "MILITARY"
                 })
     except Exception: pass
 
@@ -79,11 +84,16 @@ def fetch_global_fusion(api_key):
                     "icao24": hex_code, "callsign": str(ac.get("flight_iata", "UNKN")).strip(),
                     "latitude": float(ac.get("lat") or 0), "longitude": float(ac.get("lng") or 0),
                     "baro_altitude": float(ac.get("alt") or 0) * 3.28084, "velocity": float(ac.get("speed") or 0),
-                    "aircraft_type": str(ac.get("aircraft_icao", "UNKN")), "flight_number": str(ac.get("flight_iata", "UNKN")),
+                    "heading": float(ac.get("dir") or 0), "aircraft_type": str(ac.get("aircraft_icao", "UNKN")), 
+                    "flight_number": str(ac.get("flight_iata", "UNKN")), "airline_code": str(ac.get("airline_iata", "UNKN")),
                     "military": False
                 }
                 if hex_code in military_watchlist:
-                    tactical_grid[hex_code].update({"military": True, "aircraft_type": military_watchlist[hex_code].get("aircraft_type", "UNKN")})
+                    tactical_grid[hex_code].update({
+                        "military": True, 
+                        "aircraft_type": military_watchlist[hex_code].get("aircraft_type", "UNKN"),
+                        "airline_code": "MIL"
+                    })
             except Exception: continue
     except Exception: pass
 
@@ -96,48 +106,52 @@ def fetch_global_fusion(api_key):
     else: df["Classification"] = df["Classification"].fillna("CIVILIAN")
 
     df["Threat_Reason"] = ""
-    biz_jets = ["GLEX", "GLF4", "GLF5", "GLF6", "CL30", "CL60", "F900", "FA7X", "C750", "E55P", "C56X"]
+    
+    # 49k Ceiling Limit for Biz Jets
+    biz_jets = [
+        "GLEX", "GLF4", "GLF5", "GLF6", "GLF7", "GLF8", "GL5T", "GL7T", "G280", "G150", 
+        "CL30", "CL35", "CL60", "CRJ2", "F900", "F9EX", "FA7X", "FA8X", "F2TH", 
+        "C750", "C700", "C680", "C56X", "C560", "C550", "C525", "C510", "C25A", "C25B", "C25C", 
+        "E55P", "E50P", "E550", "E135", "E35L", "LJ60", "LJ75", "LJ70", "LJ45", "LJ40", "LJ35", "HDJT", "PC24"
+    ]
    
     for idx, row in df.iterrows():
         try:
-            vel, alt, ac_type, icao, is_mil = float(row.get("velocity", 0.0)), float(row.get("baro_altitude", 0.0)), str(row.get("aircraft_type", "")).upper(), str(row.get("icao24", "")), row.get("military", False)
+            vel, alt, heading, ac_type, icao, is_mil = float(row.get("velocity", 0.0)), float(row.get("baro_altitude", 0.0)), float(row.get("heading", 0.0)), str(row.get("aircraft_type", "")).upper(), str(row.get("icao24", "")), row.get("military", False)
             reasons = []
-            if (alt < 15000 and vel > 850): reasons.append("LOW-ALT/HI-VEL")
-            if (alt > (51000 if ac_type in biz_jets else 44000)): reasons.append("CEILING-BREACH")
-            if (vel > 1250) or (vel > 1050 and alt < 28000): reasons.append("KINEMATIC-ANOMALY")
             
-            if reasons: df.at[idx, "Threat_Reason"] = " | ".join(reasons)
-            if is_mil: df.at[idx, "Classification"] = "MILITARY"
-            elif reasons: df.at[idx, "Classification"] = "ANOMALY"    
+            # --- 1. ABSOLUTE KINEMATICS ---
+            if (alt < 15000 and vel > 850): reasons.append("LOW-ALT/HI-VEL")
+            if (alt > (49000 if ac_type in biz_jets else 45000)): reasons.append("CEILING-BREACH")
+            if (vel > 1250) or (vel > 1050 and alt < 28000): reasons.append("OVER-SPEED")
+            if (alt > 30000 and vel < 20): reasons.append("TELEMETRY-DROP/HOVER")
+            
+            # --- 2. DELTA KINEMATICS (SUDDEN MANEUVERS) ---
+            if icao in radar_memory:
+                last_data = radar_memory[icao]
+                time_delta = now_ts - last_data['ts']
+                
+                if 10 < time_delta < 120:
+                    h_diff = abs((heading - last_data['heading'] + 180) % 360 - 180)
+                    v_diff = vel - last_data['velocity']
+                    
+                    if h_diff > 35 and vel > 300: reasons.append(f"HIGH-G-TURN ({int(h_diff)}°)")
+                    if v_diff > 300: reasons.append("HARD-ACCEL")
+                    elif v_diff < -400 and alt > 5000: reasons.append("HARD-DECEL")
+
+            # Update System Memory
+            radar_memory[icao] = {'heading': heading, 'velocity': vel, 'ts': now_ts}
+
+            # --- 3. THE HIERARCHY FIX ---
+            if reasons: 
+                df.at[idx, "Threat_Reason"] = " | ".join(reasons)
+                df.at[idx, "Classification"] = "ANOMALY" 
+            elif is_mil: 
+                df.at[idx, "Classification"] = "MILITARY"
+                  
         except Exception: pass
 
-    # --- SUPABASE PERSISTENCE TRACKING ---
-    flagged_df = df[(df["military"] == True) & (df["Threat_Reason"] != "")]
-    for _, row in flagged_df.iterrows():
-        try:
-            supabase.table("anomaly_history").insert({
-                "icao24": str(row.get("icao24", "")), "classification": str(row.get("Classification", "")),
-                "threat_reason": str(row.get("Threat_Reason", "")), "latitude": float(row.get("latitude", 0)),
-                "longitude": float(row.get("longitude", 0))
-            }).execute()
-        except Exception: pass
-        
-        try:
-            icao = str(row.get("icao24", "")).upper().strip()
-            existing = supabase.table("aircraft_tracking").select("*").eq("icao24", icao).execute()
-
-            if existing.data:
-                record = existing.data[0]
-                now = pd.Timestamp.utcnow()
-                increment = ((now - pd.to_datetime(record["last_seen"])).total_seconds() > 300)
-                update_data = {"last_seen": now.isoformat(), "latest_classification": str(row.get("Classification", ""))}
-                if increment: update_data["sightings"] = record["sightings"] + 1
-                supabase.table("aircraft_tracking").update(update_data).eq("icao24", icao).execute()
-            else:
-                now = pd.Timestamp.utcnow().isoformat()
-                supabase.table("aircraft_tracking").insert({"icao24": icao, "first_seen": now, "last_seen": now, "sightings": 1, "latest_classification": str(row.get("Classification", ""))}).execute()
-        except Exception: pass
-
+    # Pull historical sightings ONLY (Read-Only)
     try:
         tracked = supabase.table("aircraft_tracking").select("icao24,sightings").execute()
         sightings_lookup = {r["icao24"]: r["sightings"] for r in tracked.data}
@@ -148,7 +162,7 @@ def fetch_global_fusion(api_key):
     return df
 
 # =====================================================================
-# 24-HOUR MACRO INTELLIGENCE (SUPABASE HOURLY WORKER DATA)
+# 24-HOUR MACRO INTELLIGENCE
 # =====================================================================
 def get_macro_intelligence():
     try:
@@ -160,15 +174,11 @@ def get_macro_intelligence():
         if len(stats_df) > 1:
             avg_flights = stats_df["total_flights"].mean()
             avg_threat_pct = (stats_df["threat_count"].sum() / stats_df["total_flights"].sum()) * 100
-            avg_mil_pct = (stats_df["military_count"].sum() / stats_df["total_flights"].sum()) * 100
         else:
             avg_flights = current["total_flights"]
             avg_threat_pct = (current["threat_count"] / current["total_flights"]) * 100 if current["total_flights"] > 0 else 0
-            avg_mil_pct = (current["military_count"] / current["total_flights"]) * 100 if current["total_flights"] > 0 else 0
 
         curr_threat_pct = (current["threat_count"] / current["total_flights"]) * 100 if current["total_flights"] > 0 else 0
-        curr_mil_pct = (current["military_count"] / current["total_flights"]) * 100 if current["total_flights"] > 0 else 0
-
         flight_delta = ((current["total_flights"] - avg_flights) / avg_flights) * 100 if avg_flights > 0 else 0
         threat_delta = curr_threat_pct - avg_threat_pct
         
@@ -218,7 +228,7 @@ if not df.empty:
     </div>
     """, unsafe_allow_html=True)
 
-    # 2. MACRO INTELLIGENCE HEADER (24H STATS)
+    # 2. MACRO INTELLIGENCE HEADER
     if macro:
         st.markdown(f"""
         <div style="display: flex; justify-content: space-between; background-color: rgba(255,255,255,0.03); padding: 10px 20px; border: 1px solid #222; margin-bottom: 25px;">
@@ -252,25 +262,31 @@ if not df.empty:
 
     view_state = pdk.ViewState(latitude=20, longitude=0, zoom=1.4, pitch=0) 
     
-    tooltip = {"html": "{icao24} | {callsign} | {aircraft_type} <br> FL{baro_altitude} | {velocity} km/h <br> Sightings: {sightings} <br> <span style='color:orange; font-weight:bold;'>{Classification}</span>", 
+    tooltip = {"html": "{icao24} | {callsign} | {aircraft_type} ({airline_code}) <br> FL{baro_altitude} | {velocity} km/h <br> Sightings: {sightings} <br> <span style='color:orange; font-weight:bold;'>{Classification}</span>", 
                "style": {"backgroundColor": "#000", "color": "#fff", "fontFamily": "monospace", "border": "1px solid #333", "fontSize": "14px"}}
 
     st.pydeck_chart(pdk.Deck(layers=[layer], initial_view_state=view_state, tooltip=tooltip, map_style="mapbox://styles/mapbox/dark-v11"), use_container_width=True)
 
-    # 4. CONTROL ROW
+    # 4. CONTROL ROW (WITH LIVE INTERCEPT TOGGLE)
     st.write("")
-    if st.button("EXECUTE SYSTEM RE-SWEEP", use_container_width=True):
-        st.cache_data.clear()
-        st.rerun()
+    col_btn, col_tog = st.columns([7, 3])
+    with col_btn:
+        if st.button("EXECUTE SYSTEM RE-SWEEP", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
+    with col_tog:
+        st.markdown("<div style='margin-top: 5px;'></div>", unsafe_allow_html=True)
+        live_mode = st.toggle("🔴 LIVE INTERCEPT (20s AUTO-SWEEP)")
 
     # 5. UNFILTERED LOG
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown("<div style='font-size: 18px; color: #fff; margin-bottom: 10px; font-weight: bold; border-bottom: 1px solid #333; padding-bottom: 5px;'>UNFILTERED RAW TELEMETRY MATRIX LOG</div>", unsafe_allow_html=True)
     
-    drop_cols = ["color"]
+    drop_cols = ["color", "heading"] 
     display_cols = [c for c in df.columns if c not in drop_cols]
     
-    front_cols = ["Classification", "icao24", "callsign", "aircraft_type", "military", "sightings", "Threat_Reason"]
+    # Injected airline_code into the high-priority front columns
+    front_cols = ["Classification", "icao24", "callsign", "airline_code", "aircraft_type", "military", "sightings", "Threat_Reason"]
     for c in reversed(front_cols):
         if c in display_cols:
             display_cols.insert(0, display_cols.pop(display_cols.index(c)))
@@ -281,9 +297,10 @@ if not df.empty:
         df_full["_rank"] = df_full["Classification"].map({"ANOMALY": 0, "MILITARY": 1, "CIVILIAN": 2})
         df_full = df_full.sort_values(by=["_rank", "baro_altitude"], ascending=[True, False]).drop(columns=["_rank"])
 
+    # Map airline_code to "Carrier"
     df_full.rename(columns={
         "Classification": "Status", "icao24": "Hex", "callsign": "Callsign", 
-        "aircraft_type": "Airframe", "military": "Mil Asset", "sightings": "Sightings", 
+        "airline_code": "Carrier", "aircraft_type": "Airframe", "military": "Mil Asset", "sightings": "Sightings", 
         "Threat_Reason": "Flags", "baro_altitude": "Alt (ft)", "velocity": "Speed (km/h)"
     }, inplace=True)
 
@@ -291,3 +308,9 @@ if not df.empty:
 
 else:
     st.error("ERR_NO_DATA: Check tracking configuration parameters.")
+
+# --- THE AUTO-SWEEP HEARTBEAT ---
+if 'live_mode' in locals() and live_mode:
+    time.sleep(20)
+    st.cache_data.clear()
+    st.rerun()
