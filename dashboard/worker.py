@@ -41,10 +41,13 @@ def process_hourly_sweep():
     tactical_grid = {}
     military_watchlist = {}
     military_tracks = []
+    
+    # Global Military ICAO Fallback Set
+    fallback_mil_icaos = {"AFX", "RRR", "CNV", "CFC", "GAF", "RFF", "ASY", "FCE", "AME", "IAM", "BAF", "NAF", "SVF", "SUI", "PLF", "ROF", "HAF", "TUAF", "MMF"}
 
     # 1. ADSB.LOL MILITARY
     try:
-        res = requests.get("https://api.adsb.lol/v2/mil", headers={"User-Agent": "AeroTrack-Worker/1.0"}, timeout=15)
+        res = requests.get("https://api.adsb.lol/v2/mil", headers={"User-Agent": "AeroTrack-Worker/1.1"}, timeout=15)
         if res.status_code == 200:
             for ac in res.json().get("ac", []):
                 hex_code = str(ac.get("hex", "")).upper().strip()
@@ -56,9 +59,14 @@ def process_hourly_sweep():
                     "baro_altitude": safe_float(ac.get("alt_baro")), "velocity": safe_float(ac.get("gs")) * 1.852,
                     "aircraft_type": str(ac.get("t", ""))
                 })
-    except Exception: pass
+        elif res.status_code == 429:
+            print("⚠️ ADSB.lol API Rate Limit (429) hit. Relying on AirLabs fallback classifier.")
+        else:
+            print(f"⚠️ ADSB.lol API returned status {res.status_code}.")
+    except Exception as e: 
+        print(f"⚠️ ADSB.lol API connection failed: {e}")
 
-    # 2. AIRLABS COMMERCIAL
+    # 2. AIRLABS COMMERCIAL & FALLBACK CLASSIFIER
     try:
         res = requests.get(f"https://airlabs.co/api/v9/flights?api_key={AIRLABS_API_KEY}", timeout=15)
         if res.status_code == 200:
@@ -66,8 +74,11 @@ def process_hourly_sweep():
                 hex_code = str(ac.get("hex", "UNKN")).upper().strip()
                 if hex_code == "UNKN" or ac.get("lat") is None or ac.get("lng") is None: continue
                 
+                airline_icao = str(ac.get("airline_icao", "UNKN")).upper().strip()
+                is_mil = (hex_code in military_watchlist) or (airline_icao in fallback_mil_icaos)
+                
                 tactical_grid[hex_code] = {
-                    "icao24": hex_code, "military": False,
+                    "icao24": hex_code, "military": is_mil,
                     "latitude": float(ac.get("lat") or 0), "longitude": float(ac.get("lng") or 0),
                     "baro_altitude": float(ac.get("alt") or 0) * 3.28084, "velocity": float(ac.get("speed") or 0),
                     "airframe": str(ac.get("aircraft_icao", "UNKN")).upper().strip(), 
@@ -75,8 +86,8 @@ def process_hourly_sweep():
                     "dep": str(ac.get("dep_iata", "UNKN")).upper().strip()
                 }
                 
-                if hex_code in military_watchlist:
-                    tactical_grid[hex_code].update({"military": True, "airframe": military_watchlist[hex_code].get("aircraft_type", "UNKN")})
+                if is_mil and hex_code in military_watchlist:
+                    tactical_grid[hex_code]["airframe"] = military_watchlist[hex_code].get("aircraft_type", "UNKN")
     except Exception: pass
 
     # 3. CONSOLIDATE AND CLEAN
