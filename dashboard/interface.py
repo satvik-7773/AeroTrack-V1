@@ -1,6 +1,5 @@
 import sys
 import os
-import json
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import requests
 import streamlit as st
@@ -10,9 +9,9 @@ from data_ingestion.client import OpenSkyClient
 from supabase import create_client
 
 # =====================================================================
-# GLOBAL CONFIGURATION 
+# INITIALIZATION 
 # =====================================================================
-st.set_page_config(page_title="AeroTrack // Intelligence", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="AeroTrack // Tactical", layout="wide", initial_sidebar_state="collapsed")
 
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
@@ -44,7 +43,7 @@ def safe_float(value, default=0.0):
     except (TypeError, ValueError): return default
 
 # =====================================================================
-# DATA MANAGEMENT ENGINE
+# CORE TACTICAL ENGINE 
 # =====================================================================
 try: client = OpenSkyClient()
 except Exception: st.stop()
@@ -59,8 +58,26 @@ def fetch_dynamic_airline_map(api_key):
     return {}
 
 @st.cache_data(ttl=15)
-def fetch_live_fleet_snapshot(api_key):
+def fetch_global_fusion(api_key):
     tactical_grid = {}
+    military_watchlist = {}
+    military_tracks = []
+
+    try:
+        res = requests.get("https://api.adsb.lol/v2/mil", headers={"User-Agent": "AeroTrack/1.0"}, timeout=15)
+        if res.status_code == 200:
+            for ac in res.json().get("ac", []):
+                hex_code = str(ac.get("hex", "")).upper().strip()
+                if not hex_code: continue
+                military_watchlist[hex_code] = {"aircraft_type": str(ac.get("t", "")).strip()}
+                military_tracks.append({
+                    "icao24": hex_code, "callsign": str(ac.get("flight", "")).strip(), "flight_number": "MIL-OPS",
+                    "latitude": float(ac.get("lat") or 0), "longitude": float(ac.get("lon") or 0),
+                    "baro_altitude": safe_float(ac.get("alt_baro")), "velocity": safe_float(ac.get("gs")) * 1.852,
+                    "aircraft_type": str(ac.get("t", "")), "airline_code": "MIL", "military": True, "Classification": "MILITARY"
+                })
+    except Exception: pass
+
     try:
         res = requests.get(f"https://airlabs.co/api/v9/flights?api_key={api_key}", timeout=15)
         for ac in (res.json().get("response", []) if res.status_code == 200 else []):
@@ -68,156 +85,193 @@ def fetch_live_fleet_snapshot(api_key):
                 hex_code = str(ac.get("hex", "UNKN")).upper().strip()
                 if hex_code == "UNKN" or ac.get("lat") is None or ac.get("lng") is None: continue
                 tactical_grid[hex_code] = {
-                    "icao24": hex_code, 
-                    "callsign": str(ac.get("flight_iata", "UNKN")).strip(),
-                    "latitude": float(ac.get("lat") or 0), 
-                    "longitude": float(ac.get("lng") or 0),
-                    "baro_altitude": float(ac.get("alt") or 0) * 3.28084, 
-                    "velocity": float(ac.get("speed") or 0),
-                    "aircraft_type": str(ac.get("aircraft_icao", "UNKN")).upper().strip(), 
-                    "airline_code": str(ac.get("airline_iata", "UNKN")).upper().strip()
+                    "icao24": hex_code, "callsign": str(ac.get("flight_iata", "UNKN")).strip(),
+                    "latitude": float(ac.get("lat") or 0), "longitude": float(ac.get("lng") or 0),
+                    "baro_altitude": float(ac.get("alt") or 0) * 3.28084, "velocity": float(ac.get("speed") or 0),
+                    "aircraft_type": str(ac.get("aircraft_icao", "UNKN")).upper().strip(), "flight_number": str(ac.get("flight_number", "UNKN")), 
+                    "airline_code": str(ac.get("airline_iata", "UNKN")).upper().strip(), "military": False, "Classification": "CIVILIAN"
                 }
+                if hex_code in military_watchlist:
+                    tactical_grid[hex_code].update({"military": True, "aircraft_type": military_watchlist[hex_code].get("aircraft_type", "UNKN"), "airline_code": "MIL", "Classification": "MILITARY", "flight_number": "MIL-OPS"})
             except Exception: continue
     except Exception: pass
-    return pd.DataFrame(list(tactical_grid.values()))
+
+    df = pd.DataFrame(list(tactical_grid.values()))
+    mil_df = pd.DataFrame(military_tracks)
+    if not mil_df.empty: df = pd.concat([df, mil_df[~mil_df["icao24"].isin(df["icao24"])]], ignore_index=True)
+    if df.empty: return df
+
+    if "Classification" not in df.columns: df["Classification"] = "CIVILIAN"
+    else: df["Classification"] = df["Classification"].fillna("CIVILIAN")
+
+    df["Threat_Reason"] = ""
+    biz_jets = [
+        "GLEX", "GLF4", "GLF5", "GLF6", "GLF7", "GLF8", "GL5T", "GL7T", "G280", "G150", 
+        "CL30", "CL35", "CL60", "CRJ2", "F900", "F9EX", "FA7X", "FA8X", "F2TH", 
+        "C750", "C700", "C680", "C56X", "C560", "C550", "C525", "C510", "C25A", "C25B", "C25C", 
+        "E55P", "E50P", "E550", "E135", "E35L", "LJ60", "LJ75", "LJ70", "LJ45", "LJ40", "LJ35", "HDJT", "PC24"
+    ]
+   
+    for idx, row in df.iterrows():
+        try:
+            vel, alt, ac_type, is_mil = float(row.get("velocity", 0.0)), float(row.get("baro_altitude", 0.0)), str(row.get("aircraft_type", "")), row.get("military", False)
+            reasons = []
+            
+            if (alt < 15000 and vel > 850): reasons.append("LOW-ALT/HI-VEL")
+            if (alt > (49000 if ac_type in biz_jets else 45000)): reasons.append("CEILING-BREACH")
+            if (vel > 1250) or (vel > 1050 and alt < 28000): reasons.append("OVER-SPEED")
+            if (alt > 30000 and vel < 20): reasons.append("TELEMETRY ANOMALY")
+            
+            if reasons: 
+                df.at[idx, "Threat_Reason"] = " | ".join(reasons)
+                df.at[idx, "Classification"] = "ANOMALY" 
+            elif is_mil: 
+                df.at[idx, "Classification"] = "MILITARY"
+        except Exception: pass
+
+    try:
+        tracked = supabase.table("aircraft_tracking").select("icao24,sightings").execute()
+        sightings_lookup = {r["icao24"]: r["sightings"] for r in tracked.data}
+        df["sightings"] = df["icao24"].map(sightings_lookup).fillna(0).astype(int)
+    except Exception: df["sightings"] = 0
+
+    return df
 
 @st.cache_data(ttl=30)
-def get_historical_macro_intel(airline_map):
+def get_macro_intelligence():
     try:
-        res = supabase.table("aerotrack_stats").select("*").order("timestamp", desc=True).limit(1).execute()
-        if not res.data: return None
-        current = res.data[0]
+        res = supabase.table("aerotrack_stats").select("*").order("timestamp", desc=True).limit(24).execute()
+        stats_df = pd.DataFrame(res.data)
+        if stats_df.empty: return None
+        
+        current = stats_df.iloc[0]
+        if len(stats_df) > 1:
+            avg_flights = stats_df["total_flights"].mean()
+            avg_threat_pct = (stats_df["threat_count"].sum() / stats_df["total_flights"].sum()) * 100
+        else:
+            avg_flights = current["total_flights"]
+            avg_threat_pct = (current["threat_count"] / current["total_flights"]) * 100 if current["total_flights"] > 0 else 0
+
+        curr_threat_pct = (current["threat_count"] / current["total_flights"]) * 100 if current["total_flights"] > 0 else 0
+        flight_delta = ((current["total_flights"] - avg_flights) / avg_flights) * 100 if avg_flights > 0 else 0
+        threat_delta = curr_threat_pct - avg_threat_pct
         
         raw_apt = str(current.get('busiest_airport', 'DFW')).upper()
         apt_txt = f"{raw_apt} ({AIRPORT_MAP.get(raw_apt, 'Intl Hub')})"
         
-        raw_g_carrier = str(current.get('top_global_carrier', 'UNKN')).upper()
-        g_carrier_txt = f"{raw_g_carrier} ({airline_map.get(raw_g_carrier, 'Commercial Operator')})"
-        
-        # Safely parse the JSON payload in case Supabase returns it as a string
-        raw_payload = current.get('intelligence_payload', {})
-        if isinstance(raw_payload, str):
-            try: raw_payload = json.loads(raw_payload)
-            except json.JSONDecodeError: raw_payload = {}
-
         return {
             "density": f"{int(current.get('total_flights', 0)):,}",
-            "busiest_region": str(current.get('busiest_region', 'NORTH AMERICAN SECTOR')).upper(),
-            "busiest_airport": apt_txt,
-            "global_carrier": g_carrier_txt,
-            "global_airframe": str(current.get('top_global_airframe', 'A320')).upper(),
-            "regional_payload": raw_payload
+            "density_delta": f"{flight_delta:+.1f}%",
+            "threat_pct": f"{curr_threat_pct:.1f}%",
+            "threat_delta": f"{threat_delta:+.1f}%",
+            "region": str(current.get('busiest_region', 'NORTH AMERICAN SECTOR')).upper(),
+            "airport": apt_txt
         }
     except Exception: return None
 
 # =====================================================================
-# INTERFACE PRESENTATION LAYOUT
+# UI PRESENTATION
 # =====================================================================
 dynamic_airline_map = fetch_dynamic_airline_map(client.api_key)
-df = fetch_live_fleet_snapshot(client.api_key)
-macro = get_historical_macro_intel(dynamic_airline_map)
+dynamic_airline_map["MIL"] = "Military Asset"
+
+df = fetch_global_fusion(client.api_key)
+macro = get_macro_intelligence()
 
 if not df.empty:
+    mil_count = len(df[df['military'] == True])
+    anom_count = len(df[df['Classification'] == 'ANOMALY'])
+    
     st.markdown(f"""
-    <div style="display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid #333; padding-bottom: 10px; margin-bottom: 15px;">
+    <div style="display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 1px solid #333; padding-bottom: 10px; margin-bottom: 10px;">
         <div>
-            <div style="font-size: 13px; color: #666; letter-spacing: 2px; font-weight: bold;">STRATEGIC MATRIX INFRASTRUCTURE</div>
-            <div style="font-size: 30px; font-weight: bold; color: #fff; letter-spacing: -0.5px;">AEROTRACK // ASSET INTEL</div>
+            <div style="font-size: 14px; color: #666; letter-spacing: 2px; font-weight: bold;">SYSTEM</div>
+            <div style="font-size: 32px; font-weight: bold; color: #fff;">AEROTRACK_V1</div>
         </div>
         <div>
-            <div style="font-size: 13px; color: #666; letter-spacing: 2px; font-weight: bold;">LIVE_TRACKS</div>
-            <div style="font-size: 30px; font-weight: bold; color: #00ffcc; text-align: right;">{len(df):,}</div>
+            <div style="font-size: 14px; color: #666; letter-spacing: 2px; font-weight: bold;">LIVE_TRACKS</div>
+            <div style="font-size: 32px; font-weight: bold; color: #00ffcc;">{len(df):,}</div>
         </div>
-        <div style="font-size: 13px; color: #555; text-align: right; line-height: 1.4;">
-            ASSET CAPITAL UTILIZATION ENGINES<br>SYSTEM SNAPSHOT LAYER // AUTH: SATVIK-7773
+        <div>
+            <div style="font-size: 14px; color: #666; letter-spacing: 2px; font-weight: bold;">MIL_ASSETS</div>
+            <div style="font-size: 32px; font-weight: bold; color: #ffaa00;">{mil_count:,}</div>
+        </div>
+        <div>
+            <div style="font-size: 14px; color: #666; letter-spacing: 2px; font-weight: bold;">ANOMALIES</div>
+            <div style="font-size: 32px; font-weight: bold; color: #ff3333;">{anom_count:,}</div>
+        </div>
+        <div style="font-size: 14px; color: #555; text-align: right; line-height: 1.5;">
+            DATA: ADSB.LOL + AIRLABS<br>AUTH: SATVIK-7773
         </div>
     </div>
     """, unsafe_allow_html=True)
 
     if macro:
         st.markdown(f"""
-        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 15px; background-color: rgba(255,255,255,0.02); padding: 15px; border: 1px solid #222; margin-bottom: 20px; font-size: 13px;">
-            <div>
-                <span style="color:#666; font-weight:bold;">VOLUME INDEX</span><br>
-                • Active Aircraft: <span style="color:#fff; font-weight:bold;">{macro['density']} units</span><br>
-                • Peak Hub Footprint: <span style="color:#ffaa00; font-weight:bold;">{macro['busiest_airport']}</span>
-            </div>
-            <div>
-                <span style="color:#666; font-weight:bold;">GLOBAL MARKET LEADER</span><br>
-                • Top Carrier (Active Fleet): <span style="color:#00ffcc; font-weight:bold;">{macro['global_carrier']}</span>
-            </div>
-            <div>
-                <span style="color:#666; font-weight:bold;">GLOBAL FLEET STANDARD</span><br>
-                • Top Airframe Type: <span style="color:#00ffcc; font-weight:bold;">{macro['global_airframe']}</span>
-            </div>
-            <div>
-                <span style="color:#666; font-weight:bold;">REGIONAL DENSITY PEAK</span><br>
-                • Highest Traffic Sector: <span style="color:#ff3333; font-weight:bold;">{macro['busiest_region']}</span>
-            </div>
+        <div style="display: flex; justify-content: space-between; background-color: rgba(255,255,255,0.03); padding: 10px 20px; border: 1px solid #222; margin-bottom: 25px;">
+            <div><span style="color:#666; font-size: 12px;">GLOBAL DENSITY (24H):</span> <span style="color:#fff; font-size: 16px;">{macro['density']}</span> <span style="color:{'#00ffcc' if float(macro['density_delta'].strip('%')) < 0 else '#ff3333'}; font-size: 12px;">[{macro['density_delta']}]</span></div>
+            <div><span style="color:#666; font-size: 12px;">THREAT INDEX (24H):</span> <span style="color:#fff; font-size: 16px;">{macro['threat_pct']}</span> <span style="color:{'#00ffcc' if float(macro['threat_delta'].strip('%')) < 0 else '#ff3333'}; font-size: 12px;">[{macro['threat_delta']}]</span></div>
+            <div><span style="color:#666; font-size: 12px;">HIGHEST AIR TRAFFIC:</span> <span style="color:#ffaa00; font-size: 16px;">{macro['region']}</span></div>
+            <div><span style="color:#666; font-size: 12px;">BUSIEST AIRPORT:</span> <span style="color:#ffaa00; font-size: 16px;">{macro['airport']}</span></div>
         </div>
         """, unsafe_allow_html=True)
 
-        st.markdown("<div style='font-size: 15px; color: #fff; font-weight: bold; margin-bottom: 8px;'>REGIONAL SECTOR OPERATOR EXPOSURE PROFILE</div>", unsafe_allow_html=True)
-        
-        reg_data = []
-        if isinstance(macro.get('regional_payload'), dict):
-            for s_name, s_vals in macro['regional_payload'].items():
-                c_code = s_vals.get('top_carrier', 'UNKN')
-                reg_data.append({
-                    "Airspace Sector Zone": s_name,
-                    "Dominant Operator Code": c_code,
-                    "Operator Corporate Title": dynamic_airline_map.get(c_code, "Commercial Operator / Non-Scheduled"),
-                    "Dominant Airframe Model Class": s_vals.get('top_airframe', 'UNKN')
-                })
-            
-            if reg_data:
-                st.dataframe(pd.DataFrame(reg_data), use_container_width=True, hide_index=True)
-            else:
-                st.info("Awaiting structural layout configurations from Database...")
-        else:
-            st.error("JSON payload decode error. Verify Supabase schema is set to JSONB.")
-    else:
-        st.markdown("<div style='color: #666; font-size: 12px; margin-bottom: 20px;'>AWAITING RE-RUN SIGNALS FROM BACKGROUND WORKER CORE...</div>", unsafe_allow_html=True)
+    def assign_color(cls):
+        if cls == "ANOMALY": return [255, 51, 51, 220]
+        elif cls == "MILITARY": return [255, 170, 0, 220]
+        return [0, 255, 204, 80]
 
+    df['color'] = df['Classification'].apply(assign_color)
+    
     layer = pdk.Layer(
         'ScatterplotLayer',
         data=df,
         get_position='[longitude, latitude]',
-        get_fill_color=[0, 255, 204, 70],
-        get_radius=4000,
-        radius_min_pixels=2.5,
-        radius_max_pixels=8,
+        get_fill_color='color',
+        get_radius=3500,
+        radius_min_pixels=3,
+        radius_max_pixels=10,
         pickable=True
     )
 
     st.pydeck_chart(pdk.Deck(
         layers=[layer], 
-        initial_view_state=pdk.ViewState(latitude=22, longitude=10, zoom=1.3, pitch=0), 
-        tooltip={"html": "<b>Asset ID:</b> {icao24}<br><b>Registration:</b> {callsign}<br><b>Airframe:</b> {aircraft_type}<br><b>Carrier:</b> {airline_code}<br><b>Altitude:</b> FL{baro_altitude:.0f} | <b>Speed:</b> {velocity:.0f} km/h", "style": {"backgroundColor": "#000", "color": "#fff", "fontFamily": "monospace", "fontSize": "13px", "border": "1px solid #333"}},
+        initial_view_state=pdk.ViewState(latitude=20, longitude=0, zoom=1.4, pitch=0), 
+        tooltip={"html": "{icao24} | {callsign} | {aircraft_type} ({airline_code}) <br> FL{baro_altitude} | {velocity} km/h <br> Sightings: {sightings} <br> <span style='color:orange; font-weight:bold;'>{Classification}</span>", "style": {"backgroundColor": "#000", "color": "#fff", "fontFamily": "monospace", "border": "1px solid #333", "fontSize": "14px"}},
         map_style="mapbox://styles/mapbox/dark-v11"
     ), use_container_width=True)
 
     st.write("")
-    if st.button("RUN GLOBAL PORTFOLIO SWEEP", use_container_width=True):
+    if st.button("EXECUTE SYSTEM RE-SWEEP", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
-    st.markdown("<br><div style='font-size: 16px; color: #fff; margin-bottom: 8px; font-weight: bold; border-bottom: 1px solid #333; padding-bottom: 5px;'>RAW ASSET UTILIZATION MATRIX</div>", unsafe_allow_html=True)
+    st.markdown("<br><div style='font-size: 18px; color: #fff; margin-bottom: 10px; font-weight: bold; border-bottom: 1px solid #333; padding-bottom: 5px;'>UNFILTERED RAW TELEMETRY MATRIX LOG</div>", unsafe_allow_html=True)
     
-    display_cols = ["icao24", "callsign", "airline_code", "aircraft_type", "baro_altitude", "velocity"]
-    df_full = df[display_cols].copy()
-    df_full = df_full.sort_values(by=["airline_code", "baro_altitude"], ascending=[True, False])
+    # EVERY SINGLE REQUESTED COLUMN INCLUDED
+    display_cols = [
+        "Classification", "icao24", "callsign", "flight_number", "airline_code", 
+        "aircraft_type", "latitude", "longitude", "baro_altitude", "velocity", 
+        "military", "sightings", "Threat_Reason"
+    ]
+    df_full = df[[c for c in display_cols if c in df.columns]].copy()
+    
+    if "Classification" in df_full.columns:
+        df_full["_rank"] = df_full["Classification"].map({"ANOMALY": 0, "MILITARY": 1, "CIVILIAN": 2})
+        df_full = df_full.sort_values(by=["_rank", "baro_altitude"], ascending=[True, False]).drop(columns=["_rank"])
 
     df_full.rename(columns={
-        "icao24": "Hex Frame ID", "callsign": "Flight Registration", 
-        "airline_code": "Carrier Code", "aircraft_type": "Airframe Model",
-        "baro_altitude": "Altitude (ft)", "velocity": "Ground Speed (km/h)"
+        "Classification": "Status", "icao24": "Hex ID", "callsign": "Callsign", "flight_number": "Flight No.",
+        "airline_code": "Carrier", "aircraft_type": "Airframe", "latitude": "Lat", "longitude": "Lon",
+        "baro_altitude": "Alt (ft)", "velocity": "Speed (km/h)", "military": "Mil Asset", 
+        "sightings": "Sightings", "Threat_Reason": "Flags"
     }, inplace=True)
     
-    if "Carrier Code" in df_full.columns:
-        c_idx = df_full.columns.get_loc("Carrier Code")
-        df_full.insert(c_idx + 1, "Airline Operating Title", df_full["Carrier Code"].map(dynamic_airline_map).fillna("Private Air Asset / Non-Scheduled"))
+    if "Carrier" in df_full.columns:
+        c_idx = df_full.columns.get_loc("Carrier")
+        df_full.insert(c_idx + 1, "Airline Name", df_full["Carrier"].map(dynamic_airline_map).fillna("Unknown / Charter"))
 
     st.dataframe(df_full, use_container_width=True, hide_index=True)
+
 else:
-    st.error("ERR_NO_STREAM: Tracking pipeline validation required.")
+    st.error("ERR_NO_DATA: Check tracking configuration parameters.")
