@@ -89,7 +89,7 @@ def fetch_global_fusion(api_key):
                     "latitude": float(ac.get("lat") or 0), "longitude": float(ac.get("lng") or 0),
                     "baro_altitude": float(ac.get("alt") or 0) * 3.28084, "velocity": float(ac.get("speed") or 0),
                     "aircraft_type": str(ac.get("aircraft_icao", "UNKN")).upper().strip(), "flight_number": str(ac.get("flight_number", "UNKN")), 
-                    "airline_code": str(ac.get("airline_iata", "UNKN")).upper().strip(), "military": False, "Classification": "CIVILIAN"
+                    "airline": str(ac.get("airline_iata", "UNKN")).upper().strip(), "military": False, "Classification": "CIVILIAN"
                 }
                 if hex_code in military_watchlist:
                     tactical_grid[hex_code].update({"military": True, "aircraft_type": military_watchlist[hex_code].get("aircraft_type", "UNKN"), "airline_code": "MIL", "Classification": "MILITARY", "flight_number": "MIL-OPS"})
