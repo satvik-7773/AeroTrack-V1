@@ -11,7 +11,7 @@ from supabase import create_client
 # =====================================================================
 # INITIALIZATION 
 # =====================================================================
-st.set_page_config(page_title="AeroTrack // Tactical", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="AeroTrack // Tactical", layout="wide", initial_sidebar_state="expanded")
 
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
@@ -35,6 +35,8 @@ st.markdown("""
     }
     div.stButton > button:first-child:hover { border-color: #fff; color: #fff; background: rgba(255,255,255,0.1); }
     .stDataFrame { border: none !important; font-size: 16px !important; }
+    /* Custom Sidebar Styling */
+    [data-testid="stSidebar"] { background-color: #0a0a0a; border-right: 1px solid #333; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -198,15 +200,57 @@ def get_macro_intelligence(_airline_map):
     except Exception: return None
 
 # =====================================================================
-# UI PRESENTATION
+# UI PRESENTATION & INTERACTIVE FILTERS
 # =====================================================================
 dynamic_airline_map = fetch_dynamic_airline_map(client.api_key)
 dynamic_airline_map["MIL"] = "Military Asset"
 
-df = fetch_global_fusion(client.api_key)
+raw_df = fetch_global_fusion(client.api_key)
 macro = get_macro_intelligence(dynamic_airline_map)
 
-if not df.empty:
+if not raw_df.empty:
+    
+    # ---------------------------------------------------------
+    # FEATURE 4: INTERACTIVE TACTICAL SIDEBAR
+    # ---------------------------------------------------------
+    st.sidebar.markdown("<h3 style='color: #00ffcc; letter-spacing: 2px;'>TACTICAL FILTERS</h3>", unsafe_allow_html=True)
+    
+    # Classification Filter
+    st.sidebar.markdown("<span style='color: #666; font-size: 12px; font-weight: bold;'>ASSET CLASSIFICATION</span>", unsafe_allow_html=True)
+    class_filter = st.sidebar.radio("", ["ALL ASSETS", "CIVILIAN ONLY", "MILITARY ONLY", "FLAGGED ANOMALIES"], label_visibility="collapsed")
+    
+    # Regional Filter
+    st.sidebar.markdown("<br><span style='color: #666; font-size: 12px; font-weight: bold;'>GEOGRAPHIC SECTOR</span>", unsafe_allow_html=True)
+    sector_list = ["GLOBAL (ALL)"] + sorted(list(raw_df["sector"].unique()))
+    region_filter = st.sidebar.selectbox("", sector_list, label_visibility="collapsed")
+    
+    # Altitude Envelope Filter
+    st.sidebar.markdown("<br><span style='color: #666; font-size: 12px; font-weight: bold;'>ALTITUDE ENVELOPE (FT)</span>", unsafe_allow_html=True)
+    min_alt = int(raw_df["baro_altitude"].min())
+    max_alt = int(raw_df["baro_altitude"].max())
+    # Failsafe if API returns weird min/max ranges
+    if min_alt == max_alt: max_alt += 1000 
+    alt_filter = st.sidebar.slider("", min_value=min_alt, max_value=max_alt, value=(min_alt, max_alt), step=1000, label_visibility="collapsed")
+    
+    st.sidebar.markdown("<hr style='border-color: #333;'>", unsafe_allow_html=True)
+    if st.sidebar.button("EXECUTE SYSTEM RE-SWEEP", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
+
+    # --- APPLY FILTERS TO DATAFRAME ---
+    df = raw_df.copy()
+    if class_filter == "CIVILIAN ONLY": df = df[df["Classification"] == "CIVILIAN"]
+    elif class_filter == "MILITARY ONLY": df = df[df["Classification"] == "MILITARY"]
+    elif class_filter == "FLAGGED ANOMALIES": df = df[df["Classification"] == "ANOMALY"]
+    
+    if region_filter != "GLOBAL (ALL)":
+        df = df[df["sector"] == region_filter]
+        
+    df = df[(df["baro_altitude"] >= alt_filter[0]) & (df["baro_altitude"] <= alt_filter[1])]
+
+    # ---------------------------------------------------------
+    # MAIN DASHBOARD RENDERING
+    # ---------------------------------------------------------
     mil_count = len(df[df['military'] == True])
     anom_count = len(df[df['Classification'] == 'ANOMALY'])
     
@@ -217,7 +261,7 @@ if not df.empty:
             <div style="font-size: 32px; font-weight: bold; color: #fff;">AEROTRACK_V1</div>
         </div>
         <div>
-            <div style="font-size: 14px; color: #666; letter-spacing: 2px; font-weight: bold;">LIVE_TRACKS</div>
+            <div style="font-size: 14px; color: #666; letter-spacing: 2px; font-weight: bold;">ACTIVE_FILTER_TRACKS</div>
             <div style="font-size: 32px; font-weight: bold; color: #00ffcc;">{len(df):,}</div>
         </div>
         <div>
@@ -255,7 +299,8 @@ if not df.empty:
     st.markdown("<div style='font-size: 18px; color: #fff; margin-bottom: 10px; font-weight: bold; border-bottom: 1px solid #333; padding-bottom: 5px;'>GEOFENCED REGIONAL INTELLIGENCE MATRIX</div>", unsafe_allow_html=True)
     regional_df = []
     
-    for sector_name, sector_df in df.groupby("sector"):
+    # Use raw_df here so the regional summary always shows the full global picture even if filtered
+    for sector_name, sector_df in raw_df.groupby("sector"):
         c_carriers = sector_df[~sector_df["airline_code"].isin(["UNKN", "", "MIL"])]
         c_frames = sector_df[~sector_df["aircraft_type"].isin(["UNKN", ""])]
         
@@ -288,60 +333,90 @@ if not df.empty:
         df_regional = df_regional.sort_values(by="Active Tracks", ascending=False)
         st.dataframe(df_regional, use_container_width=True, hide_index=True)
 
+    # ---------------------------------------------------------
+    # FEATURE 3: MARKET CONCENTRATION CHARTS
+    # ---------------------------------------------------------
+    st.markdown("<div style='font-size: 18px; color: #fff; margin-top: 25px; margin-bottom: 10px; font-weight: bold; border-bottom: 1px solid #333; padding-bottom: 5px;'>MARKET DOMINANCE & ASSET CONCENTRATION (FILTERED)</div>", unsafe_allow_html=True)
+    
+    col_chart1, col_chart2 = st.columns(2)
+    
+    with col_chart1:
+        st.markdown("<span style='color:#666; font-size:13px; font-weight:bold;'>TOP 5 ACTIVE CARRIERS</span>", unsafe_allow_html=True)
+        if not df.empty:
+            top_carriers = df[~df["airline_code"].isin(["UNKN", "", "MIL"])]["airline_code"].value_counts().head(5)
+            if not top_carriers.empty:
+                # Map codes to full names for the chart labels
+                top_carriers.index = top_carriers.index.map(lambda x: f"{dynamic_airline_map.get(x, x)} ({x})")
+                st.bar_chart(top_carriers, color="#00ffcc", height=250)
+            else:
+                st.info("Insufficient commercial carrier data in current filter.")
+    
+    with col_chart2:
+        st.markdown("<span style='color:#666; font-size:13px; font-weight:bold;'>TOP 5 DEPLOYED AIRFRAMES</span>", unsafe_allow_html=True)
+        if not df.empty:
+            top_frames = df[~df["aircraft_type"].isin(["UNKN", ""])]["aircraft_type"].value_counts().head(5)
+            if not top_frames.empty:
+                st.bar_chart(top_frames, color="#ffaa00", height=250)
+            else:
+                st.info("Insufficient airframe data in current filter.")
+
+    # --- MAP RENDERING ---
+    st.markdown("<div style='font-size: 18px; color: #fff; margin-top: 25px; margin-bottom: 10px; font-weight: bold; border-bottom: 1px solid #333; padding-bottom: 5px;'>LIVE TACTICAL RADAR</div>", unsafe_allow_html=True)
+
     def assign_color(cls):
         if cls == "ANOMALY": return [255, 51, 51, 220]
         elif cls == "MILITARY": return [255, 170, 0, 220]
         return [0, 255, 204, 80]
 
-    df['color'] = df['Classification'].apply(assign_color)
-    
-    layer = pdk.Layer(
-        'ScatterplotLayer',
-        data=df,
-        get_position='[longitude, latitude]',
-        get_fill_color='color',
-        get_radius=3500,
-        radius_min_pixels=3,
-        radius_max_pixels=10,
-        pickable=True
-    )
+    if not df.empty:
+        df['color'] = df['Classification'].apply(assign_color)
+        
+        layer = pdk.Layer(
+            'ScatterplotLayer',
+            data=df,
+            get_position='[longitude, latitude]',
+            get_fill_color='color',
+            get_radius=3500,
+            radius_min_pixels=3,
+            radius_max_pixels=10,
+            pickable=True
+        )
 
-    st.pydeck_chart(pdk.Deck(
-        layers=[layer], 
-        initial_view_state=pdk.ViewState(latitude=20, longitude=0, zoom=1.4, pitch=0), 
-        tooltip={"html": "{icao24} | {callsign} | {aircraft_type} ({airline_code}) <br> FL{baro_altitude} | {velocity} km/h <br> <span style='color:orange; font-weight:bold;'>{Classification}</span>", "style": {"backgroundColor": "#000", "color": "#fff", "fontFamily": "monospace", "border": "1px solid #333", "fontSize": "14px"}},
-        map_style="mapbox://styles/mapbox/dark-v11"
-    ), use_container_width=True)
+        st.pydeck_chart(pdk.Deck(
+            layers=[layer], 
+            initial_view_state=pdk.ViewState(latitude=20, longitude=0, zoom=1.4, pitch=0), 
+            tooltip={"html": "{icao24} | {callsign} | {aircraft_type} ({airline_code}) <br> FL{baro_altitude} | {velocity} km/h <br> <span style='color:orange; font-weight:bold;'>{Classification}</span>", "style": {"backgroundColor": "#000", "color": "#fff", "fontFamily": "monospace", "border": "1px solid #333", "fontSize": "14px"}},
+            map_style="mapbox://styles/mapbox/dark-v11"
+        ), use_container_width=True)
+    else:
+        st.warning("No tracking data matches the current sidebar filters.")
 
-    st.write("")
-    if st.button("EXECUTE SYSTEM RE-SWEEP", use_container_width=True):
-        st.cache_data.clear()
-        st.rerun()
-
+    # --- RAW MATRIX LOG ---
     st.markdown("<br><div style='font-size: 18px; color: #fff; margin-bottom: 10px; font-weight: bold; border-bottom: 1px solid #333; padding-bottom: 5px;'>UNFILTERED RAW TELEMETRY MATRIX LOG</div>", unsafe_allow_html=True)
     
-    display_cols = [
-        "Classification", "icao24", "callsign", "flight_number", "airline_code", 
-        "aircraft_type", "sector", "latitude", "longitude", "baro_altitude", "velocity", 
-        "Threat_Reason"
-    ]
-    df_full = df[[c for c in display_cols if c in df.columns]].copy()
-    
-    if "Classification" in df_full.columns:
-        df_full["_rank"] = df_full["Classification"].map({"ANOMALY": 0, "MILITARY": 1, "CIVILIAN": 2})
-        df_full = df_full.sort_values(by=["_rank", "baro_altitude"], ascending=[True, False]).drop(columns=["_rank"])
+    if not df.empty:
+        display_cols = [
+            "Classification", "icao24", "callsign", "flight_number", "airline_code", 
+            "aircraft_type", "sector", "latitude", "longitude", "baro_altitude", "velocity", 
+            "Threat_Reason"
+        ]
+        df_full = df[[c for c in display_cols if c in df.columns]].copy()
+        
+        if "Classification" in df_full.columns:
+            df_full["_rank"] = df_full["Classification"].map({"ANOMALY": 0, "MILITARY": 1, "CIVILIAN": 2})
+            df_full = df_full.sort_values(by=["_rank", "baro_altitude"], ascending=[True, False]).drop(columns=["_rank"])
 
-    df_full.rename(columns={
-        "Classification": "Status", "icao24": "Hex ID", "callsign": "Callsign", "flight_number": "Flight No.",
-        "airline_code": "Carrier", "aircraft_type": "Airframe", "sector": "Region", "latitude": "Lat", "longitude": "Lon",
-        "baro_altitude": "Alt (ft)", "velocity": "Speed (km/h)", "Threat_Reason": "Flags"
-    }, inplace=True)
-    
-    if "Carrier" in df_full.columns:
-        c_idx = df_full.columns.get_loc("Carrier")
-        df_full.insert(c_idx + 1, "Airline Name", df_full["Carrier"].map(dynamic_airline_map).fillna("Unknown / Charter"))
+        df_full.rename(columns={
+            "Classification": "Status", "icao24": "Hex ID", "callsign": "Callsign", "flight_number": "Flight No.",
+            "airline_code": "Carrier", "aircraft_type": "Airframe", "sector": "Region", "latitude": "Lat", "longitude": "Lon",
+            "baro_altitude": "Alt (ft)", "velocity": "Speed (km/h)", "Threat_Reason": "Flags"
+        }, inplace=True)
+        
+        if "Carrier" in df_full.columns:
+            c_idx = df_full.columns.get_loc("Carrier")
+            df_full.insert(c_idx + 1, "Airline Name", df_full["Carrier"].map(dynamic_airline_map).fillna("Unknown / Charter"))
 
-    st.dataframe(df_full, use_container_width=True, hide_index=True)
+        st.dataframe(df_full, use_container_width=True, hide_index=True)
 
 else:
-    st.error("ERR_NO_DATA: Check tracking configuration parameters.")
+    st.error("ERR_NO_DATA: Check tracking configuration parameters or API limits.")
