@@ -68,7 +68,9 @@ def process_hourly_sweep():
                     "icao24": hex_code, "military": False,
                     "latitude": float(ac.get("lat") or 0), "longitude": float(ac.get("lng") or 0),
                     "baro_altitude": float(ac.get("alt") or 0) * 3.28084, "velocity": float(ac.get("speed") or 0),
-                    "aircraft_type": str(ac.get("aircraft_icao", "UNKN")), "departure_iata": str(ac.get("dep_iata", "UNKN"))
+                    "airframe": str(ac.get("aircraft_icao", "UNKN")).upper().strip(), 
+                    "airline": str(ac.get("airline_iata", "UNKN")).upper().strip(),   
+                    "dep": str(ac.get("dep_iata", "UNKN")).upper().strip())
                 }
                 
                 if hex_code in military_watchlist:
@@ -76,6 +78,11 @@ def process_hourly_sweep():
     except Exception: pass
 
     df = pd.DataFrame(list(tactical_grid.values()))
+    df = df.rename(columns={
+        "airline": "airline_code", 
+        "airframe": "aircraft_type",
+        "dep": "departure_iata"
+    })
     mil_df = pd.DataFrame(military_tracks)
     if not mil_df.empty: df = pd.concat([df, mil_df[~mil_df["icao24"].isin(df["icao24"])]], ignore_index=True)
     if df.empty: return
