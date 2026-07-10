@@ -9,7 +9,7 @@ from data_ingestion.client import OpenSkyClient
 from supabase import create_client
 
 # =====================================================================
-# INITIALIZATION & MAPPING DICTIONARIES
+# INITIALIZATION & STATIC MAPS
 # =====================================================================
 st.set_page_config(page_title="AeroTrack // Root", layout="wide", initial_sidebar_state="collapsed")
 
@@ -17,15 +17,7 @@ SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Expand these dictionaries as needed for broader coverage
-AIRLINE_MAP = {
-    "AA": "American Airlines", "DL": "Delta Air Lines", "UA": "United Airlines", "WN": "Southwest Airlines",
-    "BA": "British Airways", "LH": "Lufthansa", "AF": "Air France", "EK": "Emirates", "QR": "Qatar Airways", 
-    "SQ": "Singapore Airlines", "AI": "Air India", "6E": "IndiGo", "RYR": "Ryanair", "EZY": "easyJet",
-    "CX": "Cathay Pacific", "QF": "Qantas", "AC": "Air Canada", "NH": "ANA", "JL": "Japan Airlines",
-    "TK": "Turkish Airlines", "MIL": "Military Asset"
-}
-
+# Static Airport Map for the Macro Intelligence Header
 AIRPORT_MAP = {
     "ATL": "Atlanta", "DFW": "Dallas", "DEN": "Denver", "ORD": "Chicago", "LAX": "Los Angeles", 
     "JFK": "New York", "LHR": "London", "HND": "Tokyo", "CDG": "Paris", "DXB": "Dubai", 
@@ -60,6 +52,17 @@ def safe_float(value, default=0.0):
 # =====================================================================
 try: client = OpenSkyClient()
 except Exception as e: st.stop()
+
+@st.cache_data(ttl=86400) # Caches the dictionary for 24 hours to save API calls
+def fetch_dynamic_airline_map(api_key):
+    try:
+        res = requests.get(f"https://airlabs.co/api/v9/airlines?api_key={api_key}", timeout=15)
+        if res.status_code == 200:
+            airlines = res.json().get("response", [])
+            return {al.get("iata_code"): al.get("name") for al in airlines if al.get("iata_code")}
+    except Exception:
+        pass
+    return {}
 
 @st.cache_data(ttl=15)
 def fetch_global_fusion(api_key):
@@ -163,6 +166,7 @@ def fetch_global_fusion(api_key):
                   
         except Exception: pass
 
+    # Read-Only Database Sightings Fetch
     try:
         tracked = supabase.table("aircraft_tracking").select("icao24,sightings").execute()
         sightings_lookup = {r["icao24"]: r["sightings"] for r in tracked.data}
@@ -217,6 +221,7 @@ if not df.empty:
     mil_count = len(df[df['military'] == True])
     anom_count = len(df[df['Classification'] == 'ANOMALY'])
     
+    # 1. LIVE TACTICAL HEADER
     st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 1px solid #333; padding-bottom: 10px; margin-bottom: 10px;">
         <div>
@@ -241,6 +246,7 @@ if not df.empty:
     </div>
     """, unsafe_allow_html=True)
 
+    # 2. MACRO INTELLIGENCE HEADER
     if macro:
         st.markdown(f"""
         <div style="display: flex; justify-content: space-between; background-color: rgba(255,255,255,0.03); padding: 10px 20px; border: 1px solid #222; margin-bottom: 25px;">
@@ -253,6 +259,7 @@ if not df.empty:
     else:
         st.markdown("<div style='color: #666; font-size: 12px; margin-bottom: 25px;'>AWAITING BACKGROUND WORKER TELEMETRY...</div>", unsafe_allow_html=True)
 
+    # 3. FULL WIDTH MAP
     def assign_color(cls):
         if cls == "ANOMALY": return [255, 51, 51, 220]
         elif cls == "MILITARY": return [255, 170, 0, 220]
@@ -307,11 +314,14 @@ if not df.empty:
         "airline_code": "Carrier", "aircraft_type": "Airframe", "military": "Mil Asset", "sightings": "Sightings", 
         "Threat_Reason": "Flags", "baro_altitude": "Alt (ft)", "velocity": "Speed (km/h)"
     }, inplace=True)
+
+    # --- DYNAMIC AIRLINE INJECTION ---
+    dynamic_airline_map = fetch_dynamic_airline_map(client.api_key)
+    dynamic_airline_map["MIL"] = "Military Asset" 
     
-    # Inject Carrier Name into the DataFrame
     if "Carrier" in df_full.columns:
         carrier_idx = df_full.columns.get_loc("Carrier")
-        df_full.insert(carrier_idx + 1, "Airline Name", df_full["Carrier"].map(AIRLINE_MAP).fillna("Unknown Carrier"))
+        df_full.insert(carrier_idx + 1, "Airline Name", df_full["Carrier"].map(dynamic_airline_map).fillna("Unknown Carrier"))
 
     st.dataframe(df_full, use_container_width=True, hide_index=True)
 
