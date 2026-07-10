@@ -1,5 +1,6 @@
 import sys
 import os
+import json
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import requests
 import streamlit as st
@@ -9,7 +10,7 @@ from data_ingestion.client import OpenSkyClient
 from supabase import create_client
 
 # =====================================================================
-# GLOBAL CONFIGURATION & MASTER DATA DICTIONARIES
+# GLOBAL CONFIGURATION 
 # =====================================================================
 st.set_page_config(page_title="AeroTrack // Intelligence", layout="wide", initial_sidebar_state="collapsed")
 
@@ -58,26 +59,8 @@ def fetch_dynamic_airline_map(api_key):
     return {}
 
 @st.cache_data(ttl=15)
-def fetch_global_fusion(api_key):
+def fetch_live_fleet_snapshot(api_key):
     tactical_grid = {}
-    military_watchlist = {}
-    military_tracks = []
-
-    try:
-        res = requests.get("https://api.adsb.lol/v2/mil", headers={"User-Agent": "AeroTrack/1.0"}, timeout=15)
-        if res.status_code == 200:
-            for ac in res.json().get("ac", []):
-                hex_code = str(ac.get("hex", "")).upper().strip()
-                if not hex_code: continue
-                military_watchlist[hex_code] = {"aircraft_type": str(ac.get("t", "")).strip()}
-                military_tracks.append({
-                    "icao24": hex_code, "callsign": str(ac.get("flight", "")).strip(),
-                    "latitude": float(ac.get("lat") or 0), "longitude": float(ac.get("lon") or 0),
-                    "baro_altitude": safe_float(ac.get("alt_baro")), "velocity": safe_float(ac.get("gs")) * 1.852,
-                    "aircraft_type": str(ac.get("t", "")), "airline_code": "MIL", "military": True, "Classification": "MILITARY"
-                })
-    except Exception: pass
-
     try:
         res = requests.get(f"https://airlabs.co/api/v9/flights?api_key={api_key}", timeout=15)
         for ac in (res.json().get("response", []) if res.status_code == 200 else []):
@@ -85,59 +68,18 @@ def fetch_global_fusion(api_key):
                 hex_code = str(ac.get("hex", "UNKN")).upper().strip()
                 if hex_code == "UNKN" or ac.get("lat") is None or ac.get("lng") is None: continue
                 tactical_grid[hex_code] = {
-                    "icao24": hex_code, "callsign": str(ac.get("flight_iata", "UNKN")).strip(),
-                    "latitude": float(ac.get("lat") or 0), "longitude": float(ac.get("lng") or 0),
-                    "baro_altitude": float(ac.get("alt") or 0) * 3.28084, "velocity": float(ac.get("speed") or 0),
-                    "aircraft_type": str(ac.get("aircraft_icao", "UNKN")).upper().strip(), "flight_number": str(ac.get("flight_iata", "UNKN")), 
-                    "airline_code": str(ac.get("airline_iata", "UNKN")).upper().strip(), "military": False, "Classification": "CIVILIAN"
+                    "icao24": hex_code, 
+                    "callsign": str(ac.get("flight_iata", "UNKN")).strip(),
+                    "latitude": float(ac.get("lat") or 0), 
+                    "longitude": float(ac.get("lng") or 0),
+                    "baro_altitude": float(ac.get("alt") or 0) * 3.28084, 
+                    "velocity": float(ac.get("speed") or 0),
+                    "aircraft_type": str(ac.get("aircraft_icao", "UNKN")).upper().strip(), 
+                    "airline_code": str(ac.get("airline_iata", "UNKN")).upper().strip()
                 }
-                if hex_code in military_watchlist:
-                    tactical_grid[hex_code].update({"military": True, "aircraft_type": military_watchlist[hex_code].get("aircraft_type", "UNKN"), "airline_code": "MIL", "Classification": "MILITARY"})
             except Exception: continue
     except Exception: pass
-
-    df = pd.DataFrame(list(tactical_grid.values()))
-    mil_df = pd.DataFrame(military_tracks)
-    if not mil_df.empty: df = pd.concat([df, mil_df[~mil_df["icao24"].isin(df["icao24"])]], ignore_index=True)
-    if df.empty: return df
-
-    if "Classification" not in df.columns: df["Classification"] = "CIVILIAN"
-    else: df["Classification"] = df["Classification"].fillna("CIVILIAN")
-
-    df["Threat_Reason"] = ""
-    
-    biz_jets = [
-        "GLEX", "GLF4", "GLF5", "GLF6", "GLF7", "GLF8", "GL5T", "GL7T", "G280", "G150", 
-        "CL30", "CL35", "CL60", "CRJ2", "F900", "F9EX", "FA7X", "FA8X", "F2TH", 
-        "C750", "C700", "C680", "C56X", "C560", "C550", "C525", "C510", "C25A", "C25B", "C25C", 
-        "E55P", "E50P", "E550", "E135", "E35L", "LJ60", "LJ75", "LJ70", "LJ45", "LJ40", "LJ35", "HDJT", "PC24"
-    ]
-   
-    for idx, row in df.iterrows():
-        try:
-            vel, alt, ac_type, is_mil = float(row.get("velocity", 0.0)), float(row.get("baro_altitude", 0.0)), str(row.get("aircraft_type", "")), row.get("military", False)
-            reasons = []
-            
-            # --- STATIC KINEMATIC EVALUATION ---
-            if (alt < 15000 and vel > 850): reasons.append("LOW-ALT/HI-VEL")
-            if (alt > (49000 if ac_type in biz_jets else 45000)): reasons.append("CEILING-BREACH")
-            if (vel > 1250) or (vel > 1050 and alt < 28000): reasons.append("OVER-SPEED")
-            if (alt > 30000 and vel < 20): reasons.append("TELEMETRY ANOMALY")
-            
-            if reasons: 
-                df.at[idx, "Threat_Reason"] = " | ".join(reasons)
-                df.at[idx, "Classification"] = "ANOMALY" 
-            elif is_mil: 
-                df.at[idx, "Classification"] = "MILITARY"
-        except Exception: pass
-
-    try:
-        tracked = supabase.table("aircraft_tracking").select("icao24,sightings").execute()
-        sightings_lookup = {r["icao24"]: r["sightings"] for r in tracked.data}
-        df["sightings"] = df["icao24"].map(sightings_lookup).fillna(0).astype(int)
-    except Exception: df["sightings"] = 0
-
-    return df
+    return pd.DataFrame(list(tactical_grid.values()))
 
 @st.cache_data(ttl=30)
 def get_historical_macro_intel(airline_map):
@@ -152,29 +94,30 @@ def get_historical_macro_intel(airline_map):
         raw_g_carrier = str(current.get('top_global_carrier', 'UNKN')).upper()
         g_carrier_txt = f"{raw_g_carrier} ({airline_map.get(raw_g_carrier, 'Commercial Operator')})"
         
+        # Safely parse the JSON payload in case Supabase returns it as a string
+        raw_payload = current.get('intelligence_payload', {})
+        if isinstance(raw_payload, str):
+            try: raw_payload = json.loads(raw_payload)
+            except json.JSONDecodeError: raw_payload = {}
+
         return {
             "density": f"{int(current.get('total_flights', 0)):,}",
             "busiest_region": str(current.get('busiest_region', 'NORTH AMERICAN SECTOR')).upper(),
             "busiest_airport": apt_txt,
             "global_carrier": g_carrier_txt,
-            "global_airframe": str(current.get('top_global_airframe', 'B738')).upper(),
-            "regional_payload": current.get('intelligence_payload', {})
+            "global_airframe": str(current.get('top_global_airframe', 'A320')).upper(),
+            "regional_payload": raw_payload
         }
     except Exception: return None
 
 # =====================================================================
-# UI PRESENTATION GRID
+# INTERFACE PRESENTATION LAYOUT
 # =====================================================================
 dynamic_airline_map = fetch_dynamic_airline_map(client.api_key)
-dynamic_airline_map["MIL"] = "Military Asset"
-
-df = fetch_global_fusion(client.api_key)
+df = fetch_live_fleet_snapshot(client.api_key)
 macro = get_historical_macro_intel(dynamic_airline_map)
 
 if not df.empty:
-    mil_count = len(df[df['military'] == True])
-    anom_count = len(df[df['Classification'] == 'ANOMALY'])
-    
     st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid #333; padding-bottom: 10px; margin-bottom: 15px;">
         <div>
@@ -184,14 +127,6 @@ if not df.empty:
         <div>
             <div style="font-size: 13px; color: #666; letter-spacing: 2px; font-weight: bold;">LIVE_TRACKS</div>
             <div style="font-size: 30px; font-weight: bold; color: #00ffcc; text-align: right;">{len(df):,}</div>
-        </div>
-        <div>
-            <div style="font-size: 13px; color: #666; letter-spacing: 2px; font-weight: bold;">MIL_ASSETS</div>
-            <div style="font-size: 30px; font-weight: bold; color: #ffaa00; text-align: right;">{mil_count:,}</div>
-        </div>
-        <div>
-            <div style="font-size: 13px; color: #666; letter-spacing: 2px; font-weight: bold;">FLAGGED_ANOMALIES</div>
-            <div style="font-size: 30px; font-weight: bold; color: #ff3333; text-align: right;">{anom_count:,}</div>
         </div>
         <div style="font-size: 13px; color: #555; text-align: right; line-height: 1.4;">
             ASSET CAPITAL UTILIZATION ENGINES<br>SYSTEM SNAPSHOT LAYER // AUTH: SATVIK-7773
@@ -222,35 +157,33 @@ if not df.empty:
         </div>
         """, unsafe_allow_html=True)
 
-        # 3. REGIONAL MARKET PROFILE TABLE
         st.markdown("<div style='font-size: 15px; color: #fff; font-weight: bold; margin-bottom: 8px;'>REGIONAL SECTOR OPERATOR EXPOSURE PROFILE</div>", unsafe_allow_html=True)
         
         reg_data = []
-        for s_name, s_vals in macro['regional_payload'].items():
-            c_code = s_vals.get('top_carrier', 'UNKN')
-            reg_data.append({
-                "Airspace Sector Zone": s_name,
-                "Dominant Operator Code": c_code,
-                "Operator Corporate Title": dynamic_airline_map.get(c_code, "Commercial Operator / Non-Scheduled"),
-                "Dominant Airframe Model Class": s_vals.get('top_airframe', 'UNKN')
-            })
-        
-        if reg_data:
-            st.dataframe(pd.DataFrame(reg_data), use_container_width=True, hide_index=True)
+        if isinstance(macro.get('regional_payload'), dict):
+            for s_name, s_vals in macro['regional_payload'].items():
+                c_code = s_vals.get('top_carrier', 'UNKN')
+                reg_data.append({
+                    "Airspace Sector Zone": s_name,
+                    "Dominant Operator Code": c_code,
+                    "Operator Corporate Title": dynamic_airline_map.get(c_code, "Commercial Operator / Non-Scheduled"),
+                    "Dominant Airframe Model Class": s_vals.get('top_airframe', 'UNKN')
+                })
+            
+            if reg_data:
+                st.dataframe(pd.DataFrame(reg_data), use_container_width=True, hide_index=True)
+            else:
+                st.info("Awaiting structural layout configurations from Database...")
+        else:
+            st.error("JSON payload decode error. Verify Supabase schema is set to JSONB.")
+    else:
+        st.markdown("<div style='color: #666; font-size: 12px; margin-bottom: 20px;'>AWAITING RE-RUN SIGNALS FROM BACKGROUND WORKER CORE...</div>", unsafe_allow_html=True)
 
-    # Visual Mapping Colors Restoration
-    def assign_color(cls):
-        if cls == "ANOMALY": return [255, 51, 51, 220]
-        elif cls == "MILITARY": return [255, 170, 0, 220]
-        return [0, 255, 204, 80]
-
-    df['color'] = df['Classification'].apply(assign_color)
-    
     layer = pdk.Layer(
         'ScatterplotLayer',
         data=df,
         get_position='[longitude, latitude]',
-        get_fill_color='color',
+        get_fill_color=[0, 255, 204, 70],
         get_radius=4000,
         radius_min_pixels=2.5,
         radius_max_pixels=8,
@@ -260,37 +193,24 @@ if not df.empty:
     st.pydeck_chart(pdk.Deck(
         layers=[layer], 
         initial_view_state=pdk.ViewState(latitude=22, longitude=10, zoom=1.3, pitch=0), 
-        tooltip={"html": "<b>Asset ID:</b> {icao24}<br><b>Registration:</b> {callsign}<br><b>Airframe:</b> {aircraft_type}<br><b>Status:</b> {Classification}<br><b>Altitude:</b> FL{baro_altitude:.0f} | <b>Speed:</b> {velocity:.0f} km/h", "style": {"backgroundColor": "#000", "color": "#fff", "fontFamily": "monospace", "fontSize": "13px", "border": "1px solid #333"}},
+        tooltip={"html": "<b>Asset ID:</b> {icao24}<br><b>Registration:</b> {callsign}<br><b>Airframe:</b> {aircraft_type}<br><b>Carrier:</b> {airline_code}<br><b>Altitude:</b> FL{baro_altitude:.0f} | <b>Speed:</b> {velocity:.0f} km/h", "style": {"backgroundColor": "#000", "color": "#fff", "fontFamily": "monospace", "fontSize": "13px", "border": "1px solid #333"}},
         map_style="mapbox://styles/mapbox/dark-v11"
     ), use_container_width=True)
 
-    # 5. CONTROL GRID
     st.write("")
     if st.button("RUN GLOBAL PORTFOLIO SWEEP", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
-    # 6. ASSET TRACKING DATA LOG
-    st.markdown("<br><div style='font-size: 16px; color: #fff; margin-bottom: 8px; font-weight: bold; border-bottom: 1px solid #333; padding-bottom: 5px;'>RAW CAPACITY UTILIZATION RESOURCE MATRIX</div>", unsafe_allow_html=True)
+    st.markdown("<br><div style='font-size: 16px; color: #fff; margin-bottom: 8px; font-weight: bold; border-bottom: 1px solid #333; padding-bottom: 5px;'>RAW ASSET UTILIZATION MATRIX</div>", unsafe_allow_html=True)
     
-    drop_cols = ["color"]
-    display_cols = [c for c in df.columns if c not in drop_cols]
-    
-    front_cols = ["Classification", "icao24", "callsign", "airline_code", "aircraft_type", "military", "sightings", "Threat_Reason"]
-    for c in reversed(front_cols):
-        if c in display_cols:
-            display_cols.insert(0, display_cols.pop(display_cols.index(c)))
-            
+    display_cols = ["icao24", "callsign", "airline_code", "aircraft_type", "baro_altitude", "velocity"]
     df_full = df[display_cols].copy()
-    
-    if "Classification" in df_full.columns:
-        df_full["_rank"] = df_full["Classification"].map({"ANOMALY": 0, "MILITARY": 1, "CIVILIAN": 2})
-        df_full = df_full.sort_values(by=["_rank", "baro_altitude"], ascending=[True, False]).drop(columns=["_rank"])
+    df_full = df_full.sort_values(by=["airline_code", "baro_altitude"], ascending=[True, False])
 
     df_full.rename(columns={
-        "Classification": "Status", "icao24": "Hex ID", "callsign": "Registration / Call", 
-        "airline_code": "Carrier Code", "aircraft_type": "Airframe Model", "military": "Mil Asset", 
-        "sightings": "Observed Sightings", "Threat_Reason": "Kinematic Alerts",
+        "icao24": "Hex Frame ID", "callsign": "Flight Registration", 
+        "airline_code": "Carrier Code", "aircraft_type": "Airframe Model",
         "baro_altitude": "Altitude (ft)", "velocity": "Ground Speed (km/h)"
     }, inplace=True)
     
@@ -300,4 +220,4 @@ if not df.empty:
 
     st.dataframe(df_full, use_container_width=True, hide_index=True)
 else:
-    st.error("ERR_NO_STREAM: Fleet array monitoring validation required.")
+    st.error("ERR_NO_STREAM: Tracking pipeline validation required.")
