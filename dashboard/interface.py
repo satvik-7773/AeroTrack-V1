@@ -42,6 +42,17 @@ def safe_float(value, default=0.0):
     try: return float(value)
     except (TypeError, ValueError): return default
 
+def get_airspace_sector(lat, lon):
+    if 35 <= lat <= 70 and -15 <= lon <= 45: return "EUROPEAN AIRSPACE"
+    if 25 <= lat <= 60 and -130 <= lon <= -60: return "NORTH AMERICAN SECTOR"
+    if 0 <= lat <= 50 and 100 <= lon <= 150: return "EAST ASIAN SECTOR"
+    if 10 <= lat <= 35 and 35 <= lon <= 85: return "MIDDLE EAST / S. ASIA"
+    if -50 <= lat <= 15 and -80 <= lon <= -35: return "SOUTH AMERICAN SECTOR"
+    if 15 <= lat <= 60 and -60 <= lon <= -15: return "NORTH ATLANTIC TRACKS"
+    if -50 <= lat <= 10 and 10 <= lon <= 50: return "AFRICAN AIRSPACE"
+    if -45 <= lat <= -10 and 110 <= lon <= 160: return "OCEANIC / AUSTRALASIA"
+    return "INTERNATIONAL WATERS"
+
 # =====================================================================
 # CORE TACTICAL ENGINE 
 # =====================================================================
@@ -112,6 +123,8 @@ def fetch_global_fusion(api_key):
     else: df["Classification"] = df["Classification"].fillna("CIVILIAN")
 
     df["Threat_Reason"] = ""
+    df["sector"] = df.apply(lambda r: get_airspace_sector(r["latitude"], r["longitude"]), axis=1)
+    
     biz_jets = [
         "GLEX", "GLF4", "GLF5", "GLF6", "GLF7", "GLF8", "GL5T", "GL7T", "G280", "G150", 
         "CL30", "CL35", "CL60", "CRJ2", "F900", "F9EX", "FA7X", "FA8X", "F2TH", 
@@ -238,6 +251,43 @@ if not df.empty:
         </div>
         """, unsafe_allow_html=True)
 
+    # REGIONAL GEOFENCING MATRIX UI
+    st.markdown("<div style='font-size: 18px; color: #fff; margin-bottom: 10px; font-weight: bold; border-bottom: 1px solid #333; padding-bottom: 5px;'>GEOFENCED REGIONAL INTELLIGENCE MATRIX</div>", unsafe_allow_html=True)
+    regional_df = []
+    
+    for sector_name, sector_df in df.groupby("sector"):
+        c_carriers = sector_df[~sector_df["airline_code"].isin(["UNKN", "", "MIL"])]
+        c_frames = sector_df[~sector_df["aircraft_type"].isin(["UNKN", ""])]
+        
+        if not c_carriers.empty:
+            c_counts = c_carriers["airline_code"].value_counts()
+            top_c = c_counts.index[0]
+            top_c_count = int(c_counts.iloc[0])
+            top_c_display = f"{dynamic_airline_map.get(top_c, top_c)} ({top_c})"
+        else:
+            top_c_display = "CHARTER / OP"
+            top_c_count = 0
+            
+        if not c_frames.empty:
+            top_f = str(c_frames["aircraft_type"].mode()[0])
+            top_f_count = int(c_frames["aircraft_type"].value_counts().max())
+            top_f_display = f"{top_f} ({top_f_count} units)"
+        else:
+            top_f_display = "UNKN"
+            
+        regional_df.append({
+            "Airspace Sector": sector_name,
+            "Active Tracks": len(sector_df),
+            "Dominant Carrier": top_c_display,
+            "Carrier Regional Count": top_c_count,
+            "Primary Airframe Type": top_f_display
+        })
+    
+    df_regional = pd.DataFrame(regional_df)
+    if not df_regional.empty:
+        df_regional = df_regional.sort_values(by="Active Tracks", ascending=False)
+        st.dataframe(df_regional, use_container_width=True, hide_index=True)
+
     def assign_color(cls):
         if cls == "ANOMALY": return [255, 51, 51, 220]
         elif cls == "MILITARY": return [255, 170, 0, 220]
@@ -272,7 +322,7 @@ if not df.empty:
     
     display_cols = [
         "Classification", "icao24", "callsign", "flight_number", "airline_code", 
-        "aircraft_type", "latitude", "longitude", "baro_altitude", "velocity", 
+        "aircraft_type", "sector", "latitude", "longitude", "baro_altitude", "velocity", 
         "Threat_Reason"
     ]
     df_full = df[[c for c in display_cols if c in df.columns]].copy()
@@ -283,7 +333,7 @@ if not df.empty:
 
     df_full.rename(columns={
         "Classification": "Status", "icao24": "Hex ID", "callsign": "Callsign", "flight_number": "Flight No.",
-        "airline_code": "Carrier", "aircraft_type": "Airframe", "latitude": "Lat", "longitude": "Lon",
+        "airline_code": "Carrier", "aircraft_type": "Airframe", "sector": "Region", "latitude": "Lat", "longitude": "Lon",
         "baro_altitude": "Alt (ft)", "velocity": "Speed (km/h)", "Threat_Reason": "Flags"
     }, inplace=True)
     
