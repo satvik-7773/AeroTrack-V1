@@ -84,8 +84,13 @@ def process_hourly_sweep():
         "dep": "departure_iata"
     })
     mil_df = pd.DataFrame(military_tracks)
-    if not mil_df.empty: df = pd.concat([df, mil_df[~mil_df["icao24"].isin(df["icao24"])]], ignore_index=True)
-    if df.empty: return
+    df = df.drop_duplicates(subset=["icao24"])
+    mil_df = mil_df.drop_duplicates(subset=["icao24"])
+    
+    if not mil_df.empty: 
+        # Only add military tracks that aren't already in the civilian list
+        new_mil_tracks = mil_df[~mil_df["icao24"].isin(df["icao24"])]
+        df = pd.concat([df, new_mil_tracks], ignore_index=True)
 
     if "Classification" not in df.columns: df["Classification"] = "CIVILIAN"
     else: df["Classification"] = df["Classification"].fillna("CIVILIAN")
