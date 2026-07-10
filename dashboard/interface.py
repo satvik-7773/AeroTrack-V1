@@ -114,7 +114,7 @@ def fetch_global_fusion(api_key):
    
     for idx, row in df.iterrows():
         try:
-            vel, alt, ac_type, is_mil = float(row.get("velocity", 0.0)), float(row.get("baro_altitude", 0.0)), str(row.get("aircraft_type", "")), row.get("military", False)
+            vel, alt, ac_type, is_mil = float(row.get("velocity", 0.0)), float(row.get("baro_altitude", 0.0)), str(row.get("aircraft_type", "")).upper(), row.get("military", False)
             reasons = []
             
             if (alt < 15000 and vel > 850): reasons.append("LOW-ALT/HI-VEL")
@@ -129,12 +129,6 @@ def fetch_global_fusion(api_key):
                 df.at[idx, "Classification"] = "MILITARY"
         except Exception: pass
 
-    try:
-        tracked = supabase.table("aircraft_tracking").select("icao24,sightings").execute()
-        sightings_lookup = {r["icao24"]: r["sightings"] for r in tracked.data}
-        df["sightings"] = df["icao24"].map(sightings_lookup).fillna(0).astype(int)
-    except Exception: df["sightings"] = 0
-
     return df
 
 @st.cache_data(ttl=30)
@@ -148,13 +142,18 @@ def get_macro_intelligence():
         if len(stats_df) > 1:
             avg_flights = stats_df["total_flights"].mean()
             avg_threat_pct = (stats_df["threat_count"].sum() / stats_df["total_flights"].sum()) * 100
+            avg_mil_pct = (stats_df["military_count"].sum() / stats_df["total_flights"].sum()) * 100
         else:
             avg_flights = current["total_flights"]
             avg_threat_pct = (current["threat_count"] / current["total_flights"]) * 100 if current["total_flights"] > 0 else 0
+            avg_mil_pct = (current["military_count"] / current["total_flights"]) * 100 if current["total_flights"] > 0 else 0
 
         curr_threat_pct = (current["threat_count"] / current["total_flights"]) * 100 if current["total_flights"] > 0 else 0
+        curr_mil_pct = (current["military_count"] / current["total_flights"]) * 100 if current["total_flights"] > 0 else 0
+        
         flight_delta = ((current["total_flights"] - avg_flights) / avg_flights) * 100 if avg_flights > 0 else 0
         threat_delta = curr_threat_pct - avg_threat_pct
+        mil_delta = curr_mil_pct - avg_mil_pct
         
         raw_apt = str(current.get('busiest_airport', 'DFW')).upper()
         apt_txt = f"{raw_apt} ({AIRPORT_MAP.get(raw_apt, 'Intl Hub')})"
@@ -164,6 +163,8 @@ def get_macro_intelligence():
             "density_delta": f"{flight_delta:+.1f}%",
             "threat_pct": f"{curr_threat_pct:.1f}%",
             "threat_delta": f"{threat_delta:+.1f}%",
+            "mil_pct": f"{curr_mil_pct:.1f}%",
+            "mil_delta": f"{mil_delta:+.1f}%",
             "region": str(current.get('busiest_region', 'NORTH AMERICAN SECTOR')).upper(),
             "airport": apt_txt
         }
@@ -211,6 +212,7 @@ if not df.empty:
         <div style="display: flex; justify-content: space-between; background-color: rgba(255,255,255,0.03); padding: 10px 20px; border: 1px solid #222; margin-bottom: 25px;">
             <div><span style="color:#666; font-size: 12px;">GLOBAL DENSITY (24H):</span> <span style="color:#fff; font-size: 16px;">{macro['density']}</span> <span style="color:{'#00ffcc' if float(macro['density_delta'].strip('%')) < 0 else '#ff3333'}; font-size: 12px;">[{macro['density_delta']}]</span></div>
             <div><span style="color:#666; font-size: 12px;">THREAT INDEX (24H):</span> <span style="color:#fff; font-size: 16px;">{macro['threat_pct']}</span> <span style="color:{'#00ffcc' if float(macro['threat_delta'].strip('%')) < 0 else '#ff3333'}; font-size: 12px;">[{macro['threat_delta']}]</span></div>
+            <div><span style="color:#666; font-size: 12px;">MILITARY INDEX (24H):</span> <span style="color:#fff; font-size: 16px;">{macro['mil_pct']}</span> <span style="color:{'#00ffcc' if float(macro['mil_delta'].strip('%')) < 0 else '#ffaa00'}; font-size: 12px;">[{macro['mil_delta']}]</span></div>
             <div><span style="color:#666; font-size: 12px;">HIGHEST AIR TRAFFIC:</span> <span style="color:#ffaa00; font-size: 16px;">{macro['region']}</span></div>
             <div><span style="color:#666; font-size: 12px;">BUSIEST AIRPORT:</span> <span style="color:#ffaa00; font-size: 16px;">{macro['airport']}</span></div>
         </div>
@@ -237,7 +239,7 @@ if not df.empty:
     st.pydeck_chart(pdk.Deck(
         layers=[layer], 
         initial_view_state=pdk.ViewState(latitude=20, longitude=0, zoom=1.4, pitch=0), 
-        tooltip={"html": "{icao24} | {callsign} | {aircraft_type} ({airline_code}) <br> FL{baro_altitude} | {velocity} km/h <br> Sightings: {sightings} <br> <span style='color:orange; font-weight:bold;'>{Classification}</span>", "style": {"backgroundColor": "#000", "color": "#fff", "fontFamily": "monospace", "border": "1px solid #333", "fontSize": "14px"}},
+        tooltip={"html": "{icao24} | {callsign} | {aircraft_type} ({airline_code}) <br> FL{baro_altitude} | {velocity} km/h <br> <span style='color:orange; font-weight:bold;'>{Classification}</span>", "style": {"backgroundColor": "#000", "color": "#fff", "fontFamily": "monospace", "border": "1px solid #333", "fontSize": "14px"}},
         map_style="mapbox://styles/mapbox/dark-v11"
     ), use_container_width=True)
 
@@ -248,11 +250,10 @@ if not df.empty:
 
     st.markdown("<br><div style='font-size: 18px; color: #fff; margin-bottom: 10px; font-weight: bold; border-bottom: 1px solid #333; padding-bottom: 5px;'>UNFILTERED RAW TELEMETRY MATRIX LOG</div>", unsafe_allow_html=True)
     
-    # EVERY SINGLE REQUESTED COLUMN INCLUDED
     display_cols = [
         "Classification", "icao24", "callsign", "flight_number", "airline_code", 
         "aircraft_type", "latitude", "longitude", "baro_altitude", "velocity", 
-        "military", "sightings", "Threat_Reason"
+        "Threat_Reason"
     ]
     df_full = df[[c for c in display_cols if c in df.columns]].copy()
     
@@ -263,8 +264,7 @@ if not df.empty:
     df_full.rename(columns={
         "Classification": "Status", "icao24": "Hex ID", "callsign": "Callsign", "flight_number": "Flight No.",
         "airline_code": "Carrier", "aircraft_type": "Airframe", "latitude": "Lat", "longitude": "Lon",
-        "baro_altitude": "Alt (ft)", "velocity": "Speed (km/h)", "military": "Mil Asset", 
-        "sightings": "Sightings", "Threat_Reason": "Flags"
+        "baro_altitude": "Alt (ft)", "velocity": "Speed (km/h)", "Threat_Reason": "Flags"
     }, inplace=True)
     
     if "Carrier" in df_full.columns:
