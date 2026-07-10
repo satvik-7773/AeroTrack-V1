@@ -166,7 +166,7 @@ def get_macro_intelligence():
             "mil_pct": f"{curr_mil_pct:.1f}%",
             "mil_delta": f"{mil_delta:+.1f}%",
             "region": str(current.get('busiest_region', 'NORTH AMERICAN SECTOR')).upper(),
-            "airport": apt_txt
+            "airport": apt_txt,
             "top_carrier": str(current.get('top_carrier', 'UNKN')).upper(),
             "top_carrier_count": int(current.get('top_carrier_count', 0)),
             "top_frame": str(current.get('top_global_airframe', 'UNKN')).upper(),
