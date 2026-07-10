@@ -167,6 +167,11 @@ def get_macro_intelligence():
             "mil_delta": f"{mil_delta:+.1f}%",
             "region": str(current.get('busiest_region', 'NORTH AMERICAN SECTOR')).upper(),
             "airport": apt_txt
+            "top_carrier": str(current.get('top_carrier', 'UNKN')).upper(),
+            "top_carrier_count": int(current.get('top_carrier_count', 0)),
+            "top_frame": str(current.get('top_global_airframe', 'UNKN')).upper(),
+            "top_frame_count": int(current.get('top_frame_count', 0))
+        
         }
     except Exception: return None
 
@@ -217,6 +222,14 @@ if not df.empty:
             <div><span style="color:#666; font-size: 12px;">BUSIEST AIRPORT:</span> <span style="color:#ffaa00; font-size: 16px;">{macro['airport']}</span></div>
         </div>
         """, unsafe_allow_html=True)
+        st.markdown(f"""
+        <div style="display: flex; gap: 20px; background-color: rgba(0,255,204,0.05); padding: 10px 20px; border: 1px solid #005544; margin-bottom: 25px;">
+            <div><span style="color:#666; font-size: 12px;">GLOBAL CARRIER LEADER:</span> <br><span style="color:#fff; font-size: 16px; font-weight:bold;">{macro['top_carrier']}</span> <span style="color:#00ffcc; font-size: 12px;">({macro['top_carrier_count']} active assets)</span></div>
+            <div><span style="color:#666; font-size: 12px;">GLOBAL AIRFRAME STANDARD:</span> <br><span style="color:#fff; font-size: 16px; font-weight:bold;">{macro['top_frame']}</span> <span style="color:#00ffcc; font-size: 12px;">({macro['top_frame_count']} units deployed)</span></div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    
 
     def assign_color(cls):
         if cls == "ANOMALY": return [255, 51, 51, 220]
