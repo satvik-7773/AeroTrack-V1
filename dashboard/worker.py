@@ -42,6 +42,7 @@ def process_hourly_sweep():
     military_watchlist = {}
     military_tracks = []
 
+    # 1. ADSB.LOL MILITARY
     try:
         res = requests.get("https://api.adsb.lol/v2/mil", headers={"User-Agent": "AeroTrack-Worker/1.0"}, timeout=15)
         if res.status_code == 200:
@@ -57,6 +58,7 @@ def process_hourly_sweep():
                 })
     except Exception: pass
 
+    # 2. AIRLABS COMMERCIAL
     try:
         res = requests.get(f"https://airlabs.co/api/v9/flights?api_key={AIRLABS_API_KEY}", timeout=15)
         if res.status_code == 200:
@@ -74,57 +76,39 @@ def process_hourly_sweep():
                 }
                 
                 if hex_code in military_watchlist:
-                    tactical_grid[hex_code].update({"military": True, "aircraft_type": military_watchlist[hex_code].get("aircraft_type", "UNKN")})
+                    tactical_grid[hex_code].update({"military": True, "airframe": military_watchlist[hex_code].get("aircraft_type", "UNKN")})
     except Exception: pass
 
-    df = pd.DataFrame(list(tactical_grid.values()))
-    df = df.rename(columns={
-        "airline": "airline_code", 
-        "airframe": "aircraft_type",
-        "dep": "departure_iata"
-    })
-    mil_df = pd.DataFrame(military_tracks)
-   # 1. Clean both dataframes
-    df = pd.DataFrame(list(tactical_grid.values())).drop_duplicates(subset=["icao24"])
-    mil_df = pd.DataFrame(military_tracks).drop_duplicates(subset=["icao24"])
-
-    # 2. Standardize column sets
-    # Identify common columns
-    common_cols = ["icao24", "latitude", "longitude", "baro_altitude", "velocity", "aircraft_type", "military", "Classification"]
+    # 3. CONSOLIDATE AND CLEAN
+    df_comm = pd.DataFrame(list(tactical_grid.values())).drop_duplicates(subset=["icao24"])
+    df_comm = df_comm.rename(columns={"airline": "airline_code", "airframe": "aircraft_type", "dep": "departure_iata"})
     
-    # Subset both to ensure they have the exact same structure
-    df = df.reindex(columns=common_cols)
-    mil_df = mil_df.reindex(columns=common_cols)
-
-    # 3. Perform the merge safely
+    mil_df = pd.DataFrame(military_tracks).drop_duplicates(subset=["icao24"])
+    
     if not mil_df.empty:
-        # Only keep rows from mil_df that aren't in df
-        new_mil_tracks = mil_df[~mil_df["icao24"].isin(df["icao24"])]
-        df = pd.concat([df, new_mil_tracks], axis=0, ignore_index=True)
+        new_mil_tracks = mil_df[~mil_df["icao24"].isin(df_comm["icao24"])]
+        df = pd.concat([df_comm, new_mil_tracks], axis=0, ignore_index=True)
+    else:
+        df = df_comm
 
+    # 4. DERIVE METRICS
     if "Classification" not in df.columns: df["Classification"] = "CIVILIAN"
     else: df["Classification"] = df["Classification"].fillna("CIVILIAN")
 
     df["Threat_Reason"] = ""
     df["sector"] = df.apply(lambda r: get_airspace_sector(r["latitude"], r["longitude"]), axis=1)
     
-    biz_jets = [
-        "GLEX", "GLF4", "GLF5", "GLF6", "GLF7", "GLF8", "GL5T", "GL7T", "G280", "G150", 
-        "CL30", "CL35", "CL60", "CRJ2", "F900", "F9EX", "FA7X", "FA8X", "F2TH", 
-        "C750", "C700", "C680", "C56X", "C560", "C550", "C525", "C510", "C25A", "C25B", "C25C", 
-        "E55P", "E50P", "E550", "E135", "E35L", "LJ60", "LJ75", "LJ70", "LJ45", "LJ40", "LJ35", "HDJT", "PC24"
-    ]
+    # 5. KINEMATIC THRESHOLDS
+    biz_jets = ["GLEX", "GLF4", "GLF5", "GLF6", "GLF7", "GLF8", "GL5T", "GL7T", "G280", "G150", "CL30", "CL35", "CL60", "CRJ2", "F900", "F9EX", "FA7X", "FA8X", "F2TH", "C750", "C700", "C680", "C56X", "C560", "C550", "C525", "C510", "C25A", "C25B", "C25C", "E55P", "E50P", "E550", "E135", "E35L", "LJ60", "LJ75", "LJ70", "LJ45", "LJ40", "LJ35", "HDJT", "PC24"]
    
     for idx, row in df.iterrows():
         try:
             vel, alt, ac_type, is_mil = float(row.get("velocity", 0.0)), float(row.get("baro_altitude", 0.0)), str(row.get("aircraft_type", "")).upper(), row.get("military", False)
             reasons = []
-            
             if (alt < 15000 and vel > 850): reasons.append("LOW-ALT/HI-VEL")
             if (alt > (49000 if ac_type in biz_jets else 45000)): reasons.append("CEILING-BREACH")
             if (vel > 1250) or (vel > 1050 and alt < 28000): reasons.append("OVER-SPEED")
             if (alt > 30000 and vel < 20): reasons.append("TELEMETRY ANOMALY")
-
             if reasons: 
                 df.at[idx, "Threat_Reason"] = " | ".join(reasons)
                 df.at[idx, "Classification"] = "ANOMALY" 
@@ -132,10 +116,11 @@ def process_hourly_sweep():
                 df.at[idx, "Classification"] = "MILITARY"
         except Exception: pass
 
-    # Aggregates (Standard Old Schema)
+    # 6. AGGREGATES
     valid_airports = df[(df["departure_iata"].str.upper() != "UNKN") & (df["departure_iata"] != "")]
     busiest_airport = str(valid_airports["departure_iata"].mode()[0]).upper() if not valid_airports.empty else "DFW"
     busiest_region = str(df["sector"].mode()[0]) if not df["sector"].empty else "NORTH ATLANTIC TRACKS"
+    
     clean_airlines = df[~df["airline_code"].isin(["UNKN", ""])]
     top_carrier = str(clean_airlines["airline_code"].mode()[0]) if not clean_airlines.empty else "UNKN"
     top_carrier_count = int(clean_airlines["airline_code"].value_counts().max()) if not clean_airlines.empty else 0
@@ -156,8 +141,6 @@ def process_hourly_sweep():
         "top_frame": top_frame,
         "top_frame_count": top_frame_count
     }
-
-    
 
     try:
         supabase.table("aerotrack_stats").insert(stats_payload).execute()
