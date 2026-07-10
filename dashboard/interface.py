@@ -183,6 +183,16 @@ def get_macro_intelligence(_airline_map):
         carrier_code = str(current.get('top_carrier', 'UNKN')).upper()
         full_carrier_name = _airline_map.get(carrier_code, carrier_code)
         
+        # Format Historical 24H Trendline DataFrame
+        history_df = stats_df[['timestamp', 'total_flights', 'military_count', 'threat_count']].copy()
+        history_df['timestamp'] = pd.to_datetime(history_df['timestamp']).dt.strftime('%H:%M')
+        history_df = history_df.set_index('timestamp').iloc[::-1] # Reverse to plot oldest to newest
+        history_df.rename(columns={
+            'total_flights': 'Global Commercial Volume',
+            'military_count': 'Active Military Assets',
+            'threat_count': 'Flagged Anomalies'
+        }, inplace=True)
+
         return {
             "density": f"{int(current.get('total_flights', 0)):,}",
             "density_delta": f"{flight_delta:+.1f}%",
@@ -195,7 +205,8 @@ def get_macro_intelligence(_airline_map):
             "top_carrier": f"{full_carrier_name} ({carrier_code})",
             "top_carrier_count": int(current.get('top_carrier_count', 0)),
             "top_frame": str(current.get('top_frame', 'UNKN')).upper(),
-            "top_frame_count": int(current.get('top_frame_count', 0))
+            "top_frame_count": int(current.get('top_frame_count', 0)),
+            "history_df": history_df
         }
     except Exception: return None
 
@@ -211,24 +222,20 @@ macro = get_macro_intelligence(dynamic_airline_map)
 if not raw_df.empty:
     
     # ---------------------------------------------------------
-    # FEATURE 4: INTERACTIVE TACTICAL SIDEBAR
+    # INTERACTIVE TACTICAL SIDEBAR
     # ---------------------------------------------------------
     st.sidebar.markdown("<h3 style='color: #00ffcc; letter-spacing: 2px;'>TACTICAL FILTERS</h3>", unsafe_allow_html=True)
     
-    # Classification Filter
     st.sidebar.markdown("<span style='color: #666; font-size: 12px; font-weight: bold;'>ASSET CLASSIFICATION</span>", unsafe_allow_html=True)
     class_filter = st.sidebar.radio("", ["ALL ASSETS", "CIVILIAN ONLY", "MILITARY ONLY", "FLAGGED ANOMALIES"], label_visibility="collapsed")
     
-    # Regional Filter
     st.sidebar.markdown("<br><span style='color: #666; font-size: 12px; font-weight: bold;'>GEOGRAPHIC SECTOR</span>", unsafe_allow_html=True)
     sector_list = ["GLOBAL (ALL)"] + sorted(list(raw_df["sector"].unique()))
     region_filter = st.sidebar.selectbox("", sector_list, label_visibility="collapsed")
     
-    # Altitude Envelope Filter
     st.sidebar.markdown("<br><span style='color: #666; font-size: 12px; font-weight: bold;'>ALTITUDE ENVELOPE (FT)</span>", unsafe_allow_html=True)
     min_alt = int(raw_df["baro_altitude"].min())
     max_alt = int(raw_df["baro_altitude"].max())
-    # Failsafe if API returns weird min/max ranges
     if min_alt == max_alt: max_alt += 1000 
     alt_filter = st.sidebar.slider("", min_value=min_alt, max_value=max_alt, value=(min_alt, max_alt), step=1000, label_visibility="collapsed")
     
@@ -237,15 +244,13 @@ if not raw_df.empty:
         st.cache_data.clear()
         st.rerun()
 
-    # --- APPLY FILTERS TO DATAFRAME ---
+    # --- APPLY FILTERS ---
     df = raw_df.copy()
     if class_filter == "CIVILIAN ONLY": df = df[df["Classification"] == "CIVILIAN"]
     elif class_filter == "MILITARY ONLY": df = df[df["Classification"] == "MILITARY"]
     elif class_filter == "FLAGGED ANOMALIES": df = df[df["Classification"] == "ANOMALY"]
     
-    if region_filter != "GLOBAL (ALL)":
-        df = df[df["sector"] == region_filter]
-        
+    if region_filter != "GLOBAL (ALL)": df = df[df["sector"] == region_filter]
     df = df[(df["baro_altitude"] >= alt_filter[0]) & (df["baro_altitude"] <= alt_filter[1])]
 
     # ---------------------------------------------------------
@@ -294,12 +299,18 @@ if not raw_df.empty:
             <div><span style="color:#666; font-size: 12px;">GLOBAL AIRFRAME STANDARD:</span> <br><span style="color:#fff; font-size: 16px; font-weight:bold;">{macro['top_frame']}</span> <span style="color:#00ffcc; font-size: 12px;">({macro['top_frame_count']} units deployed)</span></div>
         </div>
         """, unsafe_allow_html=True)
+        
+        # ---------------------------------------------------------
+        # FEATURE 3: 24-HOUR MACRO TRENDLINE
+        # ---------------------------------------------------------
+        if macro.get("history_df") is not None and not macro["history_df"].empty:
+            st.markdown("<div style='font-size: 18px; color: #fff; margin-top: 15px; margin-bottom: 10px; font-weight: bold; border-bottom: 1px solid #333; padding-bottom: 5px;'>24-HOUR MACRO TRENDLINE</div>", unsafe_allow_html=True)
+            st.line_chart(macro["history_df"], height=250, use_container_width=True)
 
     # REGIONAL GEOFENCING MATRIX UI
-    st.markdown("<div style='font-size: 18px; color: #fff; margin-bottom: 10px; font-weight: bold; border-bottom: 1px solid #333; padding-bottom: 5px;'>GEOFENCED REGIONAL INTELLIGENCE MATRIX</div>", unsafe_allow_html=True)
+    st.markdown("<div style='font-size: 18px; color: #fff; margin-top: 25px; margin-bottom: 10px; font-weight: bold; border-bottom: 1px solid #333; padding-bottom: 5px;'>GEOFENCED REGIONAL INTELLIGENCE MATRIX</div>", unsafe_allow_html=True)
     regional_df = []
     
-    # Use raw_df here so the regional summary always shows the full global picture even if filtered
     for sector_name, sector_df in raw_df.groupby("sector"):
         c_carriers = sector_df[~sector_df["airline_code"].isin(["UNKN", "", "MIL"])]
         c_frames = sector_df[~sector_df["aircraft_type"].isin(["UNKN", ""])]
@@ -334,22 +345,21 @@ if not raw_df.empty:
         st.dataframe(df_regional, use_container_width=True, hide_index=True)
 
     # ---------------------------------------------------------
-    # FEATURE 3: MARKET CONCENTRATION CHARTS
+    # MARKET CONCENTRATION & FEATURE 4: THREAT DIAGNOSTICS
     # ---------------------------------------------------------
-    st.markdown("<div style='font-size: 18px; color: #fff; margin-top: 25px; margin-bottom: 10px; font-weight: bold; border-bottom: 1px solid #333; padding-bottom: 5px;'>MARKET DOMINANCE & ASSET CONCENTRATION (FILTERED)</div>", unsafe_allow_html=True)
+    st.markdown("<div style='font-size: 18px; color: #fff; margin-top: 25px; margin-bottom: 10px; font-weight: bold; border-bottom: 1px solid #333; padding-bottom: 5px;'>ANALYTICAL BREAKDOWNS (FILTERED)</div>", unsafe_allow_html=True)
     
-    col_chart1, col_chart2 = st.columns(2)
+    col_chart1, col_chart2, col_chart3 = st.columns(3)
     
     with col_chart1:
         st.markdown("<span style='color:#666; font-size:13px; font-weight:bold;'>TOP 5 ACTIVE CARRIERS</span>", unsafe_allow_html=True)
         if not df.empty:
             top_carriers = df[~df["airline_code"].isin(["UNKN", "", "MIL"])]["airline_code"].value_counts().head(5)
             if not top_carriers.empty:
-                # Map codes to full names for the chart labels
                 top_carriers.index = top_carriers.index.map(lambda x: f"{dynamic_airline_map.get(x, x)} ({x})")
                 st.bar_chart(top_carriers, color="#00ffcc", height=250)
             else:
-                st.info("Insufficient commercial carrier data in current filter.")
+                st.info("Insufficient commercial carrier data.")
     
     with col_chart2:
         st.markdown("<span style='color:#666; font-size:13px; font-weight:bold;'>TOP 5 DEPLOYED AIRFRAMES</span>", unsafe_allow_html=True)
@@ -358,7 +368,17 @@ if not raw_df.empty:
             if not top_frames.empty:
                 st.bar_chart(top_frames, color="#ffaa00", height=250)
             else:
-                st.info("Insufficient airframe data in current filter.")
+                st.info("Insufficient airframe data.")
+                
+    with col_chart3:
+        st.markdown("<span style='color:#666; font-size:13px; font-weight:bold;'>ACTIVE THREAT DIAGNOSTICS</span>", unsafe_allow_html=True)
+        if not df.empty:
+            threats = df[df["Classification"] == "ANOMALY"]
+            if not threats.empty:
+                reasons = threats["Threat_Reason"].str.split(" | ").explode().value_counts()
+                st.bar_chart(reasons, color="#ff3333", height=250)
+            else:
+                st.info("No active anomalies detected in current scope.")
 
     # --- MAP RENDERING ---
     st.markdown("<div style='font-size: 18px; color: #fff; margin-top: 25px; margin-bottom: 10px; font-weight: bold; border-bottom: 1px solid #333; padding-bottom: 5px;'>LIVE TACTICAL RADAR</div>", unsafe_allow_html=True)
