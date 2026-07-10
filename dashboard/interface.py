@@ -5,12 +5,11 @@ import requests
 import streamlit as st
 import pandas as pd
 import pydeck as pdk
-import time
 from data_ingestion.client import OpenSkyClient
 from supabase import create_client
 
 # =====================================================================
-# INITIALIZATION & STATE MEMORY
+# INITIALIZATION & MAPPING DICTIONARIES
 # =====================================================================
 st.set_page_config(page_title="AeroTrack // Root", layout="wide", initial_sidebar_state="collapsed")
 
@@ -18,7 +17,22 @@ SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Persist radar state across reruns for Delta kinematics
+# Expand these dictionaries as needed for broader coverage
+AIRLINE_MAP = {
+    "AA": "American Airlines", "DL": "Delta Air Lines", "UA": "United Airlines", "WN": "Southwest Airlines",
+    "BA": "British Airways", "LH": "Lufthansa", "AF": "Air France", "EK": "Emirates", "QR": "Qatar Airways", 
+    "SQ": "Singapore Airlines", "AI": "Air India", "6E": "IndiGo", "RYR": "Ryanair", "EZY": "easyJet",
+    "CX": "Cathay Pacific", "QF": "Qantas", "AC": "Air Canada", "NH": "ANA", "JL": "Japan Airlines",
+    "TK": "Turkish Airlines", "MIL": "Military Asset"
+}
+
+AIRPORT_MAP = {
+    "ATL": "Atlanta", "DFW": "Dallas", "DEN": "Denver", "ORD": "Chicago", "LAX": "Los Angeles", 
+    "JFK": "New York", "LHR": "London", "HND": "Tokyo", "CDG": "Paris", "DXB": "Dubai", 
+    "DEL": "New Delhi", "BOM": "Mumbai", "FRA": "Frankfurt", "AMS": "Amsterdam", "MAD": "Madrid",
+    "SIN": "Singapore", "HKG": "Hong Kong", "SYD": "Sydney", "YYZ": "Toronto", "IST": "Istanbul"
+}
+
 @st.cache_resource
 def init_radar_memory():
     return {}
@@ -107,7 +121,6 @@ def fetch_global_fusion(api_key):
 
     df["Threat_Reason"] = ""
     
-    # 49k Ceiling Limit for Biz Jets
     biz_jets = [
         "GLEX", "GLF4", "GLF5", "GLF6", "GLF7", "GLF8", "GL5T", "GL7T", "G280", "G150", 
         "CL30", "CL35", "CL60", "CRJ2", "F900", "F9EX", "FA7X", "FA8X", "F2TH", 
@@ -124,9 +137,9 @@ def fetch_global_fusion(api_key):
             if (alt < 15000 and vel > 850): reasons.append("LOW-ALT/HI-VEL")
             if (alt > (49000 if ac_type in biz_jets else 45000)): reasons.append("CEILING-BREACH")
             if (vel > 1250) or (vel > 1050 and alt < 28000): reasons.append("OVER-SPEED")
-            if (alt > 30000 and vel < 20): reasons.append("TELEMETRY-DROP/HOVER")
+            if (alt > 30000 and vel < 20): reasons.append("TELEMETRY ANOMALY")
             
-            # --- 2. DELTA KINEMATICS (SUDDEN MANEUVERS) ---
+            # --- 2. DELTA KINEMATICS ---
             if icao in radar_memory:
                 last_data = radar_memory[icao]
                 time_delta = now_ts - last_data['ts']
@@ -139,7 +152,6 @@ def fetch_global_fusion(api_key):
                     if v_diff > 300: reasons.append("HARD-ACCEL")
                     elif v_diff < -400 and alt > 5000: reasons.append("HARD-DECEL")
 
-            # Update System Memory
             radar_memory[icao] = {'heading': heading, 'velocity': vel, 'ts': now_ts}
 
             # --- 3. THE HIERARCHY FIX ---
@@ -151,7 +163,6 @@ def fetch_global_fusion(api_key):
                   
         except Exception: pass
 
-    # Pull historical sightings ONLY (Read-Only)
     try:
         tracked = supabase.table("aircraft_tracking").select("icao24,sightings").execute()
         sightings_lookup = {r["icao24"]: r["sightings"] for r in tracked.data}
@@ -182,13 +193,16 @@ def get_macro_intelligence():
         flight_delta = ((current["total_flights"] - avg_flights) / avg_flights) * 100 if avg_flights > 0 else 0
         threat_delta = curr_threat_pct - avg_threat_pct
         
+        raw_airport = str(current['busiest_airport']).upper()
+        airport_display = f"{raw_airport} ({AIRPORT_MAP.get(raw_airport, 'Intl Hub')})"
+        
         return {
             "density": f"{int(current['total_flights']):,}",
             "density_delta": f"{flight_delta:+.1f}%",
             "threat_pct": f"{curr_threat_pct:.1f}%",
             "threat_delta": f"{threat_delta:+.1f}%",
             "region": str(current['busiest_region']).upper(),
-            "airport": str(current['busiest_airport']).upper()
+            "airport": airport_display
         }
     except Exception:
         return None
@@ -203,7 +217,6 @@ if not df.empty:
     mil_count = len(df[df['military'] == True])
     anom_count = len(df[df['Classification'] == 'ANOMALY'])
     
-    # 1. LIVE TACTICAL HEADER
     st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 1px solid #333; padding-bottom: 10px; margin-bottom: 10px;">
         <div>
@@ -228,20 +241,18 @@ if not df.empty:
     </div>
     """, unsafe_allow_html=True)
 
-    # 2. MACRO INTELLIGENCE HEADER
     if macro:
         st.markdown(f"""
         <div style="display: flex; justify-content: space-between; background-color: rgba(255,255,255,0.03); padding: 10px 20px; border: 1px solid #222; margin-bottom: 25px;">
             <div><span style="color:#666; font-size: 12px;">GLOBAL DENSITY (24H):</span> <span style="color:#fff; font-size: 16px;">{macro['density']}</span> <span style="color:{'#00ffcc' if float(macro['density_delta'].strip('%')) < 0 else '#ff3333'}; font-size: 12px;">[{macro['density_delta']}]</span></div>
             <div><span style="color:#666; font-size: 12px;">THREAT INDEX (24H):</span> <span style="color:#fff; font-size: 16px;">{macro['threat_pct']}</span> <span style="color:{'#00ffcc' if float(macro['threat_delta'].strip('%')) < 0 else '#ff3333'}; font-size: 12px;">[{macro['threat_delta']}]</span></div>
-            <div><span style="color:#666; font-size: 12px;">PRIMARY SECTOR:</span> <span style="color:#ffaa00; font-size: 16px;">{macro['region']}</span></div>
-            <div><span style="color:#666; font-size: 12px;">ACTIVE HUB:</span> <span style="color:#ffaa00; font-size: 16px;">{macro['airport']}</span></div>
+            <div><span style="color:#666; font-size: 12px;">HIGHEST AIR TRAFFIC:</span> <span style="color:#ffaa00; font-size: 16px;">{macro['region']}</span></div>
+            <div><span style="color:#666; font-size: 12px;">BUSIEST AIRPORT:</span> <span style="color:#ffaa00; font-size: 16px;">{macro['airport']}</span></div>
         </div>
         """, unsafe_allow_html=True)
     else:
         st.markdown("<div style='color: #666; font-size: 12px; margin-bottom: 25px;'>AWAITING BACKGROUND WORKER TELEMETRY...</div>", unsafe_allow_html=True)
 
-    # 3. FULL WIDTH MAP
     def assign_color(cls):
         if cls == "ANOMALY": return [255, 51, 51, 220]
         elif cls == "MILITARY": return [255, 170, 0, 220]
@@ -267,16 +278,11 @@ if not df.empty:
 
     st.pydeck_chart(pdk.Deck(layers=[layer], initial_view_state=view_state, tooltip=tooltip, map_style="mapbox://styles/mapbox/dark-v11"), use_container_width=True)
 
-    # 4. CONTROL ROW (WITH LIVE INTERCEPT TOGGLE)
+    # 4. CONTROL ROW
     st.write("")
-    col_btn, col_tog = st.columns([7, 3])
-    with col_btn:
-        if st.button("EXECUTE SYSTEM RE-SWEEP", use_container_width=True):
-            st.cache_data.clear()
-            st.rerun()
-    with col_tog:
-        st.markdown("<div style='margin-top: 5px;'></div>", unsafe_allow_html=True)
-        live_mode = st.toggle("🔴 LIVE INTERCEPT (20s AUTO-SWEEP)")
+    if st.button("EXECUTE SYSTEM RE-SWEEP", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
 
     # 5. UNFILTERED LOG
     st.markdown("<br>", unsafe_allow_html=True)
@@ -285,7 +291,6 @@ if not df.empty:
     drop_cols = ["color", "heading"] 
     display_cols = [c for c in df.columns if c not in drop_cols]
     
-    # Injected airline_code into the high-priority front columns
     front_cols = ["Classification", "icao24", "callsign", "airline_code", "aircraft_type", "military", "sightings", "Threat_Reason"]
     for c in reversed(front_cols):
         if c in display_cols:
@@ -297,20 +302,18 @@ if not df.empty:
         df_full["_rank"] = df_full["Classification"].map({"ANOMALY": 0, "MILITARY": 1, "CIVILIAN": 2})
         df_full = df_full.sort_values(by=["_rank", "baro_altitude"], ascending=[True, False]).drop(columns=["_rank"])
 
-    # Map airline_code to "Carrier"
     df_full.rename(columns={
         "Classification": "Status", "icao24": "Hex", "callsign": "Callsign", 
         "airline_code": "Carrier", "aircraft_type": "Airframe", "military": "Mil Asset", "sightings": "Sightings", 
         "Threat_Reason": "Flags", "baro_altitude": "Alt (ft)", "velocity": "Speed (km/h)"
     }, inplace=True)
+    
+    # Inject Carrier Name into the DataFrame
+    if "Carrier" in df_full.columns:
+        carrier_idx = df_full.columns.get_loc("Carrier")
+        df_full.insert(carrier_idx + 1, "Airline Name", df_full["Carrier"].map(AIRLINE_MAP).fillna("Unknown Carrier"))
 
     st.dataframe(df_full, use_container_width=True, hide_index=True)
 
 else:
     st.error("ERR_NO_DATA: Check tracking configuration parameters.")
-
-# --- THE AUTO-SWEEP HEARTBEAT ---
-if 'live_mode' in locals() and live_mode:
-    time.sleep(20)
-    st.cache_data.clear()
-    st.rerun()
