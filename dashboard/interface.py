@@ -335,7 +335,7 @@ if not raw_df.empty:
         else: st.info("Insufficient airframe family data.")
 
     # ---------------------------------------------------------
-    # AIRCRAFT FAMILY DEPLOYMENT DASHBOARD ⭐
+    # AIRCRAFT FAMILY DEPLOYMENT DASHBOARD 
     # ---------------------------------------------------------
     st.markdown("<div style='font-size: 18px; color: #fff; margin-top: 20px; margin-bottom: 10px; font-weight: bold; border-bottom: 1px solid #333; padding-bottom: 5px;'>ACTIVE AIRCRAFT ASSET FAMILY TREND</div>", unsafe_allow_html=True)
     
