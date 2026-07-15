@@ -22,14 +22,14 @@ def safe_float(value, default=0.0):
     except (TypeError, ValueError): return default
 
 def get_airspace_sector(lat, lon):
-    if 35 <= lat <= 70 and -15 <= lon <= 45: return "EUROPEAN AIRSPACE"
-    if 25 <= lat <= 60 and -130 <= lon <= -60: return "NORTH AMERICAN SECTOR"
-    if 0 <= lat <= 50 and 100 <= lon <= 150: return "EAST ASIAN SECTOR"
-    if 10 <= lat <= 35 and 35 <= lon <= 85: return "MIDDLE EAST / S. ASIA"
-    if -50 <= lat <= 15 and -80 <= lon <= -35: return "SOUTH AMERICAN SECTOR"
-    if 15 <= lat <= 60 and -60 <= lon <= -15: return "NORTH ATLANTIC TRACKS"
-    if -50 <= lat <= 10 and 10 <= lon <= 50: return "AFRICAN AIRSPACE"
-    if -45 <= lat <= -10 and 110 <= lon <= 160: return "OCEANIC / AUSTRALASIA"
+    if 35 <= lat <= 70 and -15 <= lon <= 45: return "EUROPEAN ZONE"
+    if 25 <= lat <= 60 and -130 <= lon <= -60: return "NORTH AMERICAN ZONE"
+    if 0 <= lat <= 50 and 100 <= lon <= 150: return "EAST ASIAN ZONE"
+    if 10 <= lat <= 35 and 35 <= lon <= 85: return "MIDDLE EAST / S. ASIA ZONE"
+    if -50 <= lat <= 15 and -80 <= lon <= -35: return "SOUTH AMERICAN ZONE"
+    if 15 <= lat <= 60 and -60 <= lon <= -15: return "NORTH ATLANTIC ZONE"
+    if -50 <= lat <= 10 and 10 <= lon <= 50: return "AFRICAN ZONE"
+    if -45 <= lat <= -10 and 110 <= lon <= 160: return "OCEANIC / AUSTRALASIA ZONE"
     return "INTERNATIONAL WATERS"
 
 # =====================================================================
