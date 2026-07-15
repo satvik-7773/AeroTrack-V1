@@ -4,14 +4,15 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import requests
 import streamlit as st
 import pandas as pd
+import numpy as np
 import pydeck as pdk
 from data_ingestion.client import OpenSkyClient
 from supabase import create_client
 
 # =====================================================================
-# INITIALIZATION 
+# INITIALIZATION & STYLING
 # =====================================================================
-st.set_page_config(page_title="AeroTrack // Tactical", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="AeroTrack // Intelligence Suite", layout="wide", initial_sidebar_state="expanded")
 
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
@@ -34,8 +35,7 @@ st.markdown("""
         border-radius: 0px; font-family: inherit; font-size: 15px; font-weight: bold; height: 45px;
     }
     div.stButton > button:first-child:hover { border-color: #fff; color: #fff; background: rgba(255,255,255,0.1); }
-    .stDataFrame { border: none !important; font-size: 16px !important; }
-    /* Custom Sidebar Styling */
+    .stDataFrame { border: none !important; font-size: 15px !important; }
     [data-testid="stSidebar"] { background-color: #0a0a0a; border-right: 1px solid #333; }
     </style>
     """, unsafe_allow_html=True)
@@ -56,7 +56,40 @@ def get_airspace_sector(lat, lon):
     return "INTERNATIONAL WATERS"
 
 # =====================================================================
-# CORE TACTICAL ENGINE 
+# ENGINE 1: TAXONOMY & CLASSIFICATION MAPPINGS
+# =====================================================================
+def classify_airframe_taxonomy(icao_code):
+    code = str(icao_code).upper().strip()
+    
+    # 1. Family Classification
+    if code in ["A318", "A319", "A320", "A321", "A20N", "A21N", "A19N"]: family = "Airbus A320 Family"
+    elif code in ["B731", "B732", "B733", "B734", "B735", "B736", "B737", "B738", "B739", "B38M", "B39M", "B3XM"]: family = "Boeing 737 Family"
+    elif code in ["A332", "A333", "A338", "A339"]: family = "Airbus A330 Family"
+    elif code in ["B772", "B773", "B77W", "B77L", "B778", "B779"]: family = "Boeing 777 Family"
+    elif code in ["B788", "B789", "B78X"]: family = "Boeing 787 Family"
+    elif code in ["A359", "A35K"]: family = "Airbus A350 Family"
+    elif code in ["E170", "E175", "E190", "E195", "E290", "E295", "CRJ1", "CRJ2", "CRJ7", "CRJ9", "CRJX", "BCS1", "BCS3", "AT43", "AT72"]: family = "Regional Aircraft"
+    elif code in ["B744", "B748", "B762", "B763", "B764", "MD11", "A300", "A310"]: family = "Legacy Widebody / Cargo"
+    elif code in ["GLEX", "GLF4", "GLF5", "GLF6", "GLF7", "GLF8", "FA7X", "FA8X", "C750", "C680", "E55P", "LJ60", "LJ75", "PC24"]: family = "Business Jets"
+    else: family = "Other / Unclassified"
+
+    # 2. Body Type Classification
+    if family in ["Airbus A320 Family", "Boeing 737 Family"]: body_type = "Narrowbody"
+    elif family in ["Airbus A330 Family", "Boeing 777 Family", "Boeing 787 Family", "Airbus A350 Family", "Legacy Widebody / Cargo"]: body_type = "Widebody"
+    elif family == "Regional Aircraft": body_type = "Regional"
+    elif family == "Business Jets": body_type = "Business Jet"
+    else: body_type = "Other"
+
+    # 3. Generation Classification
+    if code in ["A20N", "A21N", "A19N", "B38M", "B39M", "B3XM", "A338", "A339", "B788", "B789", "B78X", "A359", "A35K", "E290", "E295", "BCS1", "BCS3"]:
+        generation = "Next-Gen"
+    else:
+        generation = "Legacy"
+
+    return pd.Series([family, body_type, generation])
+
+# =====================================================================
+# DATA INGESTION ENGINE
 # =====================================================================
 try: client = OpenSkyClient()
 except Exception: st.stop()
@@ -75,7 +108,6 @@ def fetch_global_fusion(api_key):
     tactical_grid = {}
     military_watchlist = {}
     military_tracks = []
-    
     fallback_mil_icaos = {"AFX", "RRR", "CNV", "CFC", "GAF", "RFF", "ASY", "FCE", "AME", "IAM", "BAF", "NAF", "SVF", "SUI", "PLF", "ROF", "HAF", "TUAF", "MMF"}
 
     try:
@@ -110,7 +142,6 @@ def fetch_global_fusion(api_key):
                     "aircraft_type": str(ac.get("aircraft_icao", "UNKN")).upper().strip(), "flight_number": str(ac.get("flight_number", "UNKN")), 
                     "airline_code": str(ac.get("airline_iata", "UNKN")).upper().strip(), "military": is_mil, "Classification": "MILITARY" if is_mil else "CIVILIAN"
                 }
-                
                 if is_mil and hex_code in military_watchlist:
                     tactical_grid[hex_code].update({"aircraft_type": military_watchlist[hex_code].get("aircraft_type", "UNKN"), "airline_code": "MIL", "flight_number": "MIL-OPS"})
             except Exception: continue
@@ -127,28 +158,22 @@ def fetch_global_fusion(api_key):
     df["Threat_Reason"] = ""
     df["sector"] = df.apply(lambda r: get_airspace_sector(r["latitude"], r["longitude"]), axis=1)
     
-    biz_jets = [
-        "GLEX", "GLF4", "GLF5", "GLF6", "GLF7", "GLF8", "GL5T", "GL7T", "G280", "G150", 
-        "CL30", "CL35", "CL60", "CRJ2", "F900", "F9EX", "FA7X", "FA8X", "F2TH", 
-        "C750", "C700", "C680", "C56X", "C560", "C550", "C525", "C510", "C25A", "C25B", "C25C", 
-        "E55P", "E50P", "E550", "E135", "E35L", "LJ60", "LJ75", "LJ70", "LJ45", "LJ40", "LJ35", "HDJT", "PC24"
-    ]
-   
+    # Apply Taxonomy Engine
+    df[["Family", "Body_Type", "Generation"]] = df["aircraft_type"].apply(classify_airframe_taxonomy)
+    
+    biz_jets = ["GLEX", "GLF4", "GLF5", "GLF6", "GLF7", "GLF8", "GL5T", "GL7T", "G280", "G150", "CL30", "CL35", "CL60", "CRJ2", "F900", "F9EX", "FA7X", "FA8X", "F2TH", "C750", "C700", "C680", "C56X", "C560", "C550", "C525", "C510", "C25A", "C25B", "C25C", "E55P", "E50P", "E550", "E135", "E35L", "LJ60", "LJ75", "LJ70", "LJ45", "LJ40", "LJ35", "HDJT", "PC24"]
     for idx, row in df.iterrows():
         try:
             vel, alt, ac_type, is_mil = float(row.get("velocity", 0.0)), float(row.get("baro_altitude", 0.0)), str(row.get("aircraft_type", "")).upper(), row.get("military", False)
             reasons = []
-            
             if (alt < 15000 and vel > 850): reasons.append("LOW-ALT/HI-VEL")
             if (alt > (49000 if ac_type in biz_jets else 45000)): reasons.append("CEILING-BREACH")
             if (vel > 1250) or (vel > 1050 and alt < 28000): reasons.append("OVER-SPEED")
             if (alt > 30000 and vel < 20): reasons.append("TELEMETRY ANOMALY")
-            
             if reasons: 
                 df.at[idx, "Threat_Reason"] = " | ".join(reasons)
                 df.at[idx, "Classification"] = "ANOMALY" 
-            elif is_mil: 
-                df.at[idx, "Classification"] = "MILITARY"
+            elif is_mil: df.at[idx, "Classification"] = "MILITARY"
         except Exception: pass
 
     return df
@@ -159,59 +184,35 @@ def get_macro_intelligence(_airline_map):
         res = supabase.table("aerotrack_stats").select("*").order("timestamp", desc=True).limit(24).execute()
         stats_df = pd.DataFrame(res.data)
         if stats_df.empty: return None
-        
         current = stats_df.iloc[0]
-        if len(stats_df) > 1:
-            avg_flights = stats_df["total_flights"].mean()
-            avg_threat_pct = (stats_df["threat_count"].sum() / stats_df["total_flights"].sum()) * 100
-            avg_mil_pct = (stats_df["military_count"].sum() / stats_df["total_flights"].sum()) * 100
-        else:
-            avg_flights = current["total_flights"]
-            avg_threat_pct = (current["threat_count"] / current["total_flights"]) * 100 if current["total_flights"] > 0 else 0
-            avg_mil_pct = (current["military_count"] / current["total_flights"]) * 100 if current["total_flights"] > 0 else 0
-
+        
+        avg_flights = stats_df["total_flights"].mean() if len(stats_df) > 1 else current["total_flights"]
         curr_threat_pct = (current["threat_count"] / current["total_flights"]) * 100 if current["total_flights"] > 0 else 0
         curr_mil_pct = (current["military_count"] / current["total_flights"]) * 100 if current["total_flights"] > 0 else 0
-        
         flight_delta = ((current["total_flights"] - avg_flights) / avg_flights) * 100 if avg_flights > 0 else 0
-        threat_delta = curr_threat_pct - avg_threat_pct
-        mil_delta = curr_mil_pct - avg_mil_pct
         
         raw_apt = str(current.get('busiest_airport', 'DFW')).upper()
         apt_txt = f"{raw_apt} ({AIRPORT_MAP.get(raw_apt, 'Intl Hub')})"
-        
         carrier_code = str(current.get('top_carrier', 'UNKN')).upper()
         full_carrier_name = _airline_map.get(carrier_code, carrier_code)
         
-        # Format Historical 24H Trendline DataFrame
         history_df = stats_df[['timestamp', 'total_flights', 'military_count', 'threat_count']].copy()
         history_df['timestamp'] = pd.to_datetime(history_df['timestamp']).dt.strftime('%H:%M')
-        history_df = history_df.set_index('timestamp').iloc[::-1] # Reverse to plot oldest to newest
-        history_df.rename(columns={
-            'total_flights': 'Global Commercial Volume',
-            'military_count': 'Active Military Assets',
-            'threat_count': 'Flagged Anomalies'
-        }, inplace=True)
+        history_df = history_df.set_index('timestamp').iloc[::-1]
+        history_df.rename(columns={'total_flights': 'Global Volume', 'military_count': 'Military', 'threat_count': 'Anomalies'}, inplace=True)
 
         return {
-            "density": f"{int(current.get('total_flights', 0)):,}",
-            "density_delta": f"{flight_delta:+.1f}%",
-            "threat_pct": f"{curr_threat_pct:.1f}%",
-            "threat_delta": f"{threat_delta:+.1f}%",
-            "mil_pct": f"{curr_mil_pct:.1f}%",
-            "mil_delta": f"{mil_delta:+.1f}%",
-            "region": str(current.get('busiest_region', 'NORTH AMERICAN SECTOR')).upper(),
-            "airport": apt_txt,
-            "top_carrier": f"{full_carrier_name} ({carrier_code})",
-            "top_carrier_count": int(current.get('top_carrier_count', 0)),
-            "top_frame": str(current.get('top_frame', 'UNKN')).upper(),
-            "top_frame_count": int(current.get('top_frame_count', 0)),
+            "density": f"{int(current.get('total_flights', 0)):,}", "density_delta": f"{flight_delta:+.1f}%",
+            "threat_pct": f"{curr_threat_pct:.1f}%", "mil_pct": f"{curr_mil_pct:.1f}%",
+            "region": str(current.get('busiest_region', 'NORTH AMERICAN SECTOR')).upper(), "airport": apt_txt,
+            "top_carrier": f"{full_carrier_name} ({carrier_code})", "top_carrier_count": int(current.get('top_carrier_count', 0)),
+            "top_frame": str(current.get('top_frame', 'UNKN')).upper(), "top_frame_count": int(current.get('top_frame_count', 0)),
             "history_df": history_df
         }
     except Exception: return None
 
 # =====================================================================
-# UI PRESENTATION & INTERACTIVE FILTERS
+# UI & INTERACTIVE TACTICAL SIDEBAR
 # =====================================================================
 dynamic_airline_map = fetch_dynamic_airline_map(client.api_key)
 dynamic_airline_map["MIL"] = "Military Asset"
@@ -220,167 +221,150 @@ raw_df = fetch_global_fusion(client.api_key)
 macro = get_macro_intelligence(dynamic_airline_map)
 
 if not raw_df.empty:
-    
-    # ---------------------------------------------------------
-    # INTERACTIVE TACTICAL SIDEBAR
-    # ---------------------------------------------------------
     st.sidebar.markdown("<h3 style='color: #00ffcc; letter-spacing: 2px;'>TACTICAL FILTERS</h3>", unsafe_allow_html=True)
+    class_filter = st.sidebar.radio("ASSET CLASSIFICATION", ["ALL ASSETS", "CIVILIAN ONLY", "MILITARY ONLY", "FLAGGED ANOMALIES"])
     
-    st.sidebar.markdown("<span style='color: #666; font-size: 12px; font-weight: bold;'>ASSET CLASSIFICATION</span>", unsafe_allow_html=True)
-    class_filter = st.sidebar.radio("", ["ALL ASSETS", "CIVILIAN ONLY", "MILITARY ONLY", "FLAGGED ANOMALIES"], label_visibility="collapsed")
-    
-    st.sidebar.markdown("<br><span style='color: #666; font-size: 12px; font-weight: bold;'>GEOGRAPHIC SECTOR</span>", unsafe_allow_html=True)
     sector_list = ["GLOBAL (ALL)"] + sorted(list(raw_df["sector"].unique()))
-    region_filter = st.sidebar.selectbox("", sector_list, label_visibility="collapsed")
+    region_filter = st.sidebar.selectbox("GEOGRAPHIC SECTOR", sector_list)
     
-    st.sidebar.markdown("<br><span style='color: #666; font-size: 12px; font-weight: bold;'>ALTITUDE ENVELOPE (FT)</span>", unsafe_allow_html=True)
-    min_alt = int(raw_df["baro_altitude"].min())
-    max_alt = int(raw_df["baro_altitude"].max())
+    min_alt, max_alt = int(raw_df["baro_altitude"].min()), int(raw_df["baro_altitude"].max())
     if min_alt == max_alt: max_alt += 1000 
-    alt_filter = st.sidebar.slider("", min_value=min_alt, max_value=max_alt, value=(min_alt, max_alt), step=1000, label_visibility="collapsed")
+    alt_filter = st.sidebar.slider("ALTITUDE ENVELOPE (FT)", min_value=min_alt, max_value=max_alt, value=(min_alt, max_alt), step=1000)
     
     st.sidebar.markdown("<hr style='border-color: #333;'>", unsafe_allow_html=True)
     if st.sidebar.button("EXECUTE SYSTEM RE-SWEEP", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
-    # --- APPLY FILTERS ---
     df = raw_df.copy()
     if class_filter == "CIVILIAN ONLY": df = df[df["Classification"] == "CIVILIAN"]
     elif class_filter == "MILITARY ONLY": df = df[df["Classification"] == "MILITARY"]
     elif class_filter == "FLAGGED ANOMALIES": df = df[df["Classification"] == "ANOMALY"]
-    
     if region_filter != "GLOBAL (ALL)": df = df[df["sector"] == region_filter]
     df = df[(df["baro_altitude"] >= alt_filter[0]) & (df["baro_altitude"] <= alt_filter[1])]
 
     # ---------------------------------------------------------
-    # MAIN DASHBOARD RENDERING
+    # TOP HEADER & MACRO INTEL
     # ---------------------------------------------------------
-    mil_count = len(df[df['military'] == True])
-    anom_count = len(df[df['Classification'] == 'ANOMALY'])
-    
     st.markdown(f"""
     <div style="display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 1px solid #333; padding-bottom: 10px; margin-bottom: 10px;">
-        <div>
-            <div style="font-size: 14px; color: #666; letter-spacing: 2px; font-weight: bold;">SYSTEM</div>
-            <div style="font-size: 32px; font-weight: bold; color: #fff;">AEROTRACK_V1</div>
-        </div>
-        <div>
-            <div style="font-size: 14px; color: #666; letter-spacing: 2px; font-weight: bold;">ACTIVE_FILTER_TRACKS</div>
-            <div style="font-size: 32px; font-weight: bold; color: #00ffcc;">{len(df):,}</div>
-        </div>
-        <div>
-            <div style="font-size: 14px; color: #666; letter-spacing: 2px; font-weight: bold;">MIL_ASSETS</div>
-            <div style="font-size: 32px; font-weight: bold; color: #ffaa00;">{mil_count:,}</div>
-        </div>
-        <div>
-            <div style="font-size: 14px; color: #666; letter-spacing: 2px; font-weight: bold;">ANOMALIES</div>
-            <div style="font-size: 32px; font-weight: bold; color: #ff3333;">{anom_count:,}</div>
-        </div>
-        <div style="font-size: 14px; color: #555; text-align: right; line-height: 1.5;">
-            DATA: ADSB.LOL + AIRLABS<br>AUTH: SATVIK-7773
-        </div>
+        <div><div style="font-size: 14px; color: #666; letter-spacing: 2px; font-weight: bold;">SYSTEM</div><div style="font-size: 32px; font-weight: bold; color: #fff;">AEROTRACK_V2</div></div>
+        <div><div style="font-size: 14px; color: #666; letter-spacing: 2px; font-weight: bold;">ACTIVE_TRACKS</div><div style="font-size: 32px; font-weight: bold; color: #00ffcc;">{len(df):,}</div></div>
+        <div><div style="font-size: 14px; color: #666; letter-spacing: 2px; font-weight: bold;">MIL_ASSETS</div><div style="font-size: 32px; font-weight: bold; color: #ffaa00;">{len(df[df['military']==True]):,}</div></div>
+        <div><div style="font-size: 14px; color: #666; letter-spacing: 2px; font-weight: bold;">ANOMALIES</div><div style="font-size: 32px; font-weight: bold; color: #ff3333;">{len(df[df['Classification']=='ANOMALY']):,}</div></div>
+        <div style="font-size: 14px; color: #555; text-align: right; line-height: 1.5;">DATA: ADSB.LOL + AIRLABS<br>ANALYTICS: ASSET INTEL SUITE</div>
     </div>
     """, unsafe_allow_html=True)
 
     if macro:
         st.markdown(f"""
-        <div style="display: flex; justify-content: space-between; background-color: rgba(255,255,255,0.03); padding: 10px 20px; border: 1px solid #222; margin-bottom: 25px;">
-            <div><span style="color:#666; font-size: 12px;">GLOBAL DENSITY (24H):</span> <span style="color:#fff; font-size: 16px;">{macro['density']}</span> <span style="color:{'#00ffcc' if float(macro['density_delta'].strip('%')) < 0 else '#ff3333'}; font-size: 12px;">[{macro['density_delta']}]</span></div>
-            <div><span style="color:#666; font-size: 12px;">THREAT INDEX (24H):</span> <span style="color:#fff; font-size: 16px;">{macro['threat_pct']}</span> <span style="color:{'#00ffcc' if float(macro['threat_delta'].strip('%')) < 0 else '#ff3333'}; font-size: 12px;">[{macro['threat_delta']}]</span></div>
-            <div><span style="color:#666; font-size: 12px;">MILITARY INDEX (24H):</span> <span style="color:#fff; font-size: 16px;">{macro['mil_pct']}</span> <span style="color:{'#00ffcc' if float(macro['mil_delta'].strip('%')) < 0 else '#ffaa00'}; font-size: 12px;">[{macro['mil_delta']}]</span></div>
-            <div><span style="color:#666; font-size: 12px;">HIGHEST AIR TRAFFIC:</span> <span style="color:#ffaa00; font-size: 16px;">{macro['region']}</span></div>
-            <div><span style="color:#666; font-size: 12px;">BUSIEST AIRPORT:</span> <span style="color:#ffaa00; font-size: 16px;">{macro['airport']}</span></div>
+        <div style="display: flex; justify-content: space-between; background-color: rgba(255,255,255,0.03); padding: 10px 20px; border: 1px solid #222; margin-bottom: 15px;">
+            <div><span style="color:#666; font-size: 12px;">GLOBAL DENSITY:</span> <span style="color:#fff; font-size: 16px;">{macro['density']}</span> <span style="color:{'#00ffcc' if float(macro['density_delta'].strip('%')) < 0 else '#ff3333'}; font-size: 12px;">[{macro['density_delta']}]</span></div>
+            <div><span style="color:#666; font-size: 12px;">THREAT INDEX:</span> <span style="color:#fff; font-size: 16px;">{macro['threat_pct']}</span></div>
+            <div><span style="color:#666; font-size: 12px;">MILITARY INDEX:</span> <span style="color:#fff; font-size: 16px;">{macro['mil_pct']}</span></div>
+            <div><span style="color:#666; font-size: 12px;">TOP SECTOR:</span> <span style="color:#ffaa00; font-size: 16px;">{macro['region']}</span></div>
+            <div><span style="color:#666; font-size: 12px;">BUSIEST HUB:</span> <span style="color:#ffaa00; font-size: 16px;">{macro['airport']}</span></div>
         </div>
         """, unsafe_allow_html=True)
-        st.markdown(f"""
-        <div style="display: flex; gap: 20px; background-color: rgba(0,255,204,0.05); padding: 10px 20px; border: 1px solid #005544; margin-bottom: 25px;">
-            <div><span style="color:#666; font-size: 12px;">GLOBAL CARRIER LEADER:</span> <br><span style="color:#fff; font-size: 16px; font-weight:bold;">{macro['top_carrier']}</span> <span style="color:#00ffcc; font-size: 12px;">({macro['top_carrier_count']} active assets)</span></div>
-            <div><span style="color:#666; font-size: 12px;">GLOBAL AIRFRAME STANDARD:</span> <br><span style="color:#fff; font-size: 16px; font-weight:bold;">{macro['top_frame']}</span> <span style="color:#00ffcc; font-size: 12px;">({macro['top_frame_count']} units deployed)</span></div>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # ---------------------------------------------------------
-        # FEATURE 3: 24-HOUR MACRO TRENDLINE
-        # ---------------------------------------------------------
-        if macro.get("history_df") is not None and not macro["history_df"].empty:
-            st.markdown("<div style='font-size: 18px; color: #fff; margin-top: 15px; margin-bottom: 10px; font-weight: bold; border-bottom: 1px solid #333; padding-bottom: 5px;'>24-HOUR MACRO TRENDLINE</div>", unsafe_allow_html=True)
-            st.line_chart(macro["history_df"], height=250, use_container_width=True)
 
-    # REGIONAL GEOFENCING MATRIX UI
-    st.markdown("<div style='font-size: 18px; color: #fff; margin-top: 25px; margin-bottom: 10px; font-weight: bold; border-bottom: 1px solid #333; padding-bottom: 5px;'>GEOFENCED REGIONAL INTELLIGENCE MATRIX</div>", unsafe_allow_html=True)
-    regional_df = []
+    # ---------------------------------------------------------
+    # ENGINE 4: AIRCRAFT FAMILY DEPLOYMENT DASHBOARD (#16 ⭐)
+    # ---------------------------------------------------------
+    st.markdown("<div style='font-size: 18px; color: #fff; margin-top: 20px; margin-bottom: 10px; font-weight: bold; border-bottom: 1px solid #333; padding-bottom: 5px;'>AIRCRAFT FAMILY DEPLOYMENT DASHBOARD ⭐</div>", unsafe_allow_html=True)
+    
+    available_families = sorted([f for f in raw_df["Family"].unique() if f != "Other / Unclassified"])
+    selected_family = st.selectbox("SELECT AIRCRAFT FAMILY FOR STRATEGIC ANALYSIS", available_families)
+    
+    if selected_family:
+        fam_df = raw_df[raw_df["Family"] == selected_family]
+        fam_active = len(fam_df)
+        fam_share = (fam_active / len(raw_df)) * 100 if len(raw_df) > 0 else 0
+        fam_ops = fam_df[~fam_df["airline_code"].isin(["UNKN", "", "MIL"])]["airline_code"].nunique()
+        top_fam_region = fam_df["sector"].mode()[0] if not fam_df.empty else "N/A"
+        
+        top_op_code = fam_df[~fam_df["airline_code"].isin(["UNKN", "", "MIL"])]["airline_code"].mode()[0] if fam_ops > 0 else "UNKN"
+        top_op_name = dynamic_airline_map.get(top_op_code, top_op_code)
+        
+        st.markdown(f"""
+        <div style="display: flex; justify-content: space-between; background-color: rgba(0,255,204,0.05); padding: 15px 20px; border: 1px solid #005544; margin-bottom: 20px;">
+            <div><span style="color:#666; font-size: 12px;">ACTIVE ASSETS:</span><br><span style="color:#00ffcc; font-size: 20px; font-weight:bold;">{fam_active:,}</span> <span style="color:#fff; font-size: 14px;">({fam_share:.1f}% Global Share)</span></div>
+            <div><span style="color:#666; font-size: 12px;">GLOBAL OPERATORS:</span><br><span style="color:#fff; font-size: 20px; font-weight:bold;">{fam_ops} Airlines</span></div>
+            <div><span style="color:#666; font-size: 12px;">DOMINANT REGION:</span><br><span style="color:#ffaa00; font-size: 20px; font-weight:bold;">{top_fam_region}</span></div>
+            <div><span style="color:#666; font-size: 12px;">PRIMARY OPERATOR:</span><br><span style="color:#fff; font-size: 20px; font-weight:bold;">{top_op_name} ({top_op_code})</span></div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # ---------------------------------------------------------
+    # ENGINE 2 & 3: REGIONAL INDEX & CONCENTRATION (#1, #14)
+    # ---------------------------------------------------------
+    st.markdown("<div style='font-size: 18px; color: #fff; margin-top: 20px; margin-bottom: 10px; font-weight: bold; border-bottom: 1px solid #333; padding-bottom: 5px;'>GEOFENCED REGIONAL CAPACITY & CONCENTRATION MATRIX</div>", unsafe_allow_html=True)
+    
+    total_global_tracks = len(raw_df)
+    regional_data = []
     
     for sector_name, sector_df in raw_df.groupby("sector"):
-        c_carriers = sector_df[~sector_df["airline_code"].isin(["UNKN", "", "MIL"])]
-        c_frames = sector_df[~sector_df["aircraft_type"].isin(["UNKN", ""])]
+        sec_tracks = len(sector_df)
+        fleet_share_idx = (sec_tracks / total_global_tracks) * 100 if total_global_tracks > 0 else 0
         
-        if not c_carriers.empty:
-            c_counts = c_carriers["airline_code"].value_counts()
-            top_c = c_counts.index[0]
-            top_c_count = int(c_counts.iloc[0])
-            top_c_display = f"{dynamic_airline_map.get(top_c, top_c)} ({top_c})"
-        else:
-            top_c_display = "CHARTER / OP"
-            top_c_count = 0
+        # Herfindahl-Hirschman Index - Operator Concentration (#14)
+        carrier_counts = sector_df[~sector_df["airline_code"].isin(["UNKN", "", "MIL"])]["airline_code"].value_counts()
+        if not carrier_counts.empty:
+            c_props = carrier_counts / carrier_counts.sum()
+            hhi = sum(c_props ** 2) * 10000
+            if hhi > 2500: conc_status = "🔴 Highly Concentrated"
+            elif hhi > 1500: conc_status = "🟡 Moderately Concentrated"
+            else: conc_status = "🟢 Highly Competitive"
             
-        if not c_frames.empty:
-            top_f = str(c_frames["aircraft_type"].mode()[0])
-            top_f_count = int(c_frames["aircraft_type"].value_counts().max())
-            top_f_display = f"{top_f} ({top_f_count} units)"
+            top_c = carrier_counts.index[0]
+            top_c_str = f"{dynamic_airline_map.get(top_c, top_c)} ({top_c})"
         else:
-            top_f_display = "UNKN"
-            
-        regional_df.append({
+            conc_status = "⚪ N/A (Charter/Mil)"
+            top_c_str = "NONE / CHARTER"
+
+        top_fam = sector_df["Family"].mode()[0] if not sector_df.empty else "UNKN"
+
+        regional_data.append({
             "Airspace Sector": sector_name,
-            "Active Tracks": len(sector_df),
-            "Dominant Carrier": top_c_display,
-            "Carrier Regional Count": top_c_count,
-            "Primary Airframe Type": top_f_display
+            "Active Tracks": sec_tracks,
+            "Deployment Share (#1)": f"{fleet_share_idx:.1f}%",
+            "Market Concentration (#14)": conc_status,
+            "Dominant Carrier": top_c_str,
+            "Dominant Family": top_fam
         })
-    
-    df_regional = pd.DataFrame(regional_df)
-    if not df_regional.empty:
-        df_regional = df_regional.sort_values(by="Active Tracks", ascending=False)
-        st.dataframe(df_regional, use_container_width=True, hide_index=True)
+
+    df_regional = pd.DataFrame(regional_data).sort_values(by="Active Tracks", ascending=False)
+    st.dataframe(df_regional, use_container_width=True, hide_index=True)
 
     # ---------------------------------------------------------
-    # MARKET CONCENTRATION & FEATURE 4: THREAT DIAGNOSTICS
+    # FLEET GENERATION & BODY TYPE CHARTS (#3, #8, #12)
     # ---------------------------------------------------------
-    st.markdown("<div style='font-size: 18px; color: #fff; margin-top: 25px; margin-bottom: 10px; font-weight: bold; border-bottom: 1px solid #333; padding-bottom: 5px;'>ANALYTICAL BREAKDOWNS (FILTERED)</div>", unsafe_allow_html=True)
+    st.markdown("<div style='font-size: 18px; color: #fff; margin-top: 25px; margin-bottom: 10px; font-weight: bold; border-bottom: 1px solid #333; padding-bottom: 5px;'>GLOBAL ASSET DISTRIBUTION & MODERNIZATION TRENDS</div>", unsafe_allow_html=True)
     
-    col_chart1, col_chart2, col_chart3 = st.columns(3)
-    
-    with col_chart1:
-        st.markdown("<span style='color:#666; font-size:13px; font-weight:bold;'>TOP 5 ACTIVE CARRIERS</span>", unsafe_allow_html=True)
-        if not df.empty:
-            top_carriers = df[~df["airline_code"].isin(["UNKN", "", "MIL"])]["airline_code"].value_counts().head(5)
-            if not top_carriers.empty:
-                top_carriers.index = top_carriers.index.map(lambda x: f"{dynamic_airline_map.get(x, x)} ({x})")
-                st.bar_chart(top_carriers, color="#00ffcc", height=250)
-            else:
-                st.info("Insufficient commercial carrier data.")
-    
-    with col_chart2:
-        st.markdown("<span style='color:#666; font-size:13px; font-weight:bold;'>TOP 5 DEPLOYED AIRFRAMES</span>", unsafe_allow_html=True)
-        if not df.empty:
-            top_frames = df[~df["aircraft_type"].isin(["UNKN", ""])]["aircraft_type"].value_counts().head(5)
-            if not top_frames.empty:
-                st.bar_chart(top_frames, color="#ffaa00", height=250)
-            else:
-                st.info("Insufficient airframe data.")
-                
-    with col_chart3:
-        st.markdown("<span style='color:#666; font-size:13px; font-weight:bold;'>ACTIVE THREAT DIAGNOSTICS</span>", unsafe_allow_html=True)
-        if not df.empty:
-            threats = df[df["Classification"] == "ANOMALY"]
-            if not threats.empty:
-                reasons = threats["Threat_Reason"].str.split(" | ").explode().value_counts()
-                st.bar_chart(reasons, color="#ff3333", height=250)
-            else:
-                st.info("No active anomalies detected in current scope.")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown("<span style='color:#666; font-size:13px; font-weight:bold;'>TOP AIRCRAFT FAMILIES (#12)</span>", unsafe_allow_html=True)
+        fam_chart_data = df[df["Family"] != "Other / Unclassified"]["Family"].value_counts().head(5)
+        if not fam_chart_data.empty: st.bar_chart(fam_chart_data, color="#00ffcc", height=220)
+        else: st.info("No unclassified family data.")
+            
+    with col2:
+        st.markdown("<span style='color:#666; font-size:13px; font-weight:bold;'>BODY TYPE DEPLOYMENT (#8, #9)</span>", unsafe_allow_html=True)
+        body_chart_data = df[df["Body_Type"] != "Other"]["Body_Type"].value_counts()
+        if not body_chart_data.empty: st.bar_chart(body_chart_data, color="#ffaa00", height=220)
+        else: st.info("No body type data.")
+            
+    with col3:
+        st.markdown("<span style='color:#666; font-size:13px; font-weight:bold;'>FLEET GENERATION ADOPTION (#3)</span>", unsafe_allow_html=True)
+        gen_counts = df["Generation"].value_counts()
+        if not gen_counts.empty:
+            st.bar_chart(gen_counts, color="#0088ff", height=220)
+            legacy_pct = (gen_counts.get("Legacy", 0) / len(df)) * 100
+            next_pct = (gen_counts.get("Next-Gen", 0) / len(df)) * 100
+            st.markdown(f"<div style='text-align:center; font-size:13px; color:#aaa;'>Legacy: <b>{legacy_pct:.1f}%</b> | Next-Gen: <b style='color:#00ffcc;'>{next_pct:.1f}%</b></div>", unsafe_allow_html=True)
 
-    # --- MAP RENDERING ---
+    # ---------------------------------------------------------
+    # LIVE PYDECK RADAR & RAW TELEMETRY LOG
+    # ---------------------------------------------------------
     st.markdown("<div style='font-size: 18px; color: #fff; margin-top: 25px; margin-bottom: 10px; font-weight: bold; border-bottom: 1px solid #333; padding-bottom: 5px;'>LIVE TACTICAL RADAR</div>", unsafe_allow_html=True)
 
     def assign_color(cls):
@@ -388,55 +372,29 @@ if not raw_df.empty:
         elif cls == "MILITARY": return [255, 170, 0, 220]
         return [0, 255, 204, 80]
 
-    if not df.empty:
-        df['color'] = df['Classification'].apply(assign_color)
-        
-        layer = pdk.Layer(
-            'ScatterplotLayer',
-            data=df,
-            get_position='[longitude, latitude]',
-            get_fill_color='color',
-            get_radius=3500,
-            radius_min_pixels=3,
-            radius_max_pixels=10,
-            pickable=True
-        )
+    df['color'] = df['Classification'].apply(assign_color)
+    layer = pdk.Layer(
+        'ScatterplotLayer', data=df, get_position='[longitude, latitude]',
+        get_fill_color='color', get_radius=3500, radius_min_pixels=3, radius_max_pixels=10, pickable=True
+    )
+    st.pydeck_chart(pdk.Deck(
+        layers=[layer], initial_view_state=pdk.ViewState(latitude=20, longitude=0, zoom=1.4, pitch=0), 
+        tooltip={"html": "{icao24} | {callsign} | {Family} ({Generation}) <br> FL{baro_altitude} | {velocity} km/h <br> <span style='color:orange; font-weight:bold;'>{Classification}</span>", "style": {"backgroundColor": "#000", "color": "#fff", "fontFamily": "monospace", "border": "1px solid #333", "fontSize": "13px"}},
+        map_style="mapbox://styles/mapbox/dark-v11"
+    ), use_container_width=True)
 
-        st.pydeck_chart(pdk.Deck(
-            layers=[layer], 
-            initial_view_state=pdk.ViewState(latitude=20, longitude=0, zoom=1.4, pitch=0), 
-            tooltip={"html": "{icao24} | {callsign} | {aircraft_type} ({airline_code}) <br> FL{baro_altitude} | {velocity} km/h <br> <span style='color:orange; font-weight:bold;'>{Classification}</span>", "style": {"backgroundColor": "#000", "color": "#fff", "fontFamily": "monospace", "border": "1px solid #333", "fontSize": "14px"}},
-            map_style="mapbox://styles/mapbox/dark-v11"
-        ), use_container_width=True)
-    else:
-        st.warning("No tracking data matches the current sidebar filters.")
-
-    # --- RAW MATRIX LOG ---
     st.markdown("<br><div style='font-size: 18px; color: #fff; margin-bottom: 10px; font-weight: bold; border-bottom: 1px solid #333; padding-bottom: 5px;'>UNFILTERED RAW TELEMETRY MATRIX LOG</div>", unsafe_allow_html=True)
+    display_cols = ["Classification", "icao24", "callsign", "airline_code", "Family", "Body_Type", "Generation", "sector", "baro_altitude", "velocity", "Threat_Reason"]
+    df_full = df[[c for c in display_cols if c in df.columns]].copy()
+    if "Classification" in df_full.columns:
+        df_full["_rank"] = df_full["Classification"].map({"ANOMALY": 0, "MILITARY": 1, "CIVILIAN": 2})
+        df_full = df_full.sort_values(by=["_rank", "baro_altitude"], ascending=[True, False]).drop(columns=["_rank"])
     
-    if not df.empty:
-        display_cols = [
-            "Classification", "icao24", "callsign", "flight_number", "airline_code", 
-            "aircraft_type", "sector", "latitude", "longitude", "baro_altitude", "velocity", 
-            "Threat_Reason"
-        ]
-        df_full = df[[c for c in display_cols if c in df.columns]].copy()
-        
-        if "Classification" in df_full.columns:
-            df_full["_rank"] = df_full["Classification"].map({"ANOMALY": 0, "MILITARY": 1, "CIVILIAN": 2})
-            df_full = df_full.sort_values(by=["_rank", "baro_altitude"], ascending=[True, False]).drop(columns=["_rank"])
-
-        df_full.rename(columns={
-            "Classification": "Status", "icao24": "Hex ID", "callsign": "Callsign", "flight_number": "Flight No.",
-            "airline_code": "Carrier", "aircraft_type": "Airframe", "sector": "Region", "latitude": "Lat", "longitude": "Lon",
-            "baro_altitude": "Alt (ft)", "velocity": "Speed (km/h)", "Threat_Reason": "Flags"
-        }, inplace=True)
-        
-        if "Carrier" in df_full.columns:
-            c_idx = df_full.columns.get_loc("Carrier")
-            df_full.insert(c_idx + 1, "Airline Name", df_full["Carrier"].map(dynamic_airline_map).fillna("Unknown / Charter"))
-
-        st.dataframe(df_full, use_container_width=True, hide_index=True)
+    df_full.rename(columns={"Classification": "Status", "icao24": "Hex ID", "callsign": "Callsign", "airline_code": "Carrier", "sector": "Region", "baro_altitude": "Alt (ft)", "velocity": "Speed (km/h)", "Threat_Reason": "Flags"}, inplace=True)
+    if "Carrier" in df_full.columns:
+        df_full.insert(df_full.columns.get_loc("Carrier") + 1, "Airline Name", df_full["Carrier"].map(dynamic_airline_map).fillna("Unknown / Charter"))
+    
+    st.dataframe(df_full, use_container_width=True, hide_index=True)
 
 else:
     st.error("ERR_NO_DATA: Check tracking configuration parameters or API limits.")
