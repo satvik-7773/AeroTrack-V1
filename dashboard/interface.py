@@ -1,5 +1,8 @@
 import sys
 import os
+import base64
+from datetime import datetime, timezone
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import requests
 import streamlit as st
@@ -13,13 +16,12 @@ from data_ingestion.client import OpenSkyClient
 from supabase import create_client
 
 # -----------------------------------------------------------------------------
-# PAGE CONFIGURATION
+# PAGE CONFIGURATION (SIDEBAR REMOVED)
 # -----------------------------------------------------------------------------
 st.set_page_config(
-    page_title="AeroTrack // Global Aviation Intelligence",
-    page_icon="✈️",
+    page_title="AeroTrack // Aviation Operations & Fleet Telemetry",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 # -----------------------------------------------------------------------------
@@ -37,397 +39,460 @@ AIRPORT_MAP = {
 }
 
 # -----------------------------------------------------------------------------
-# MODERN AURORA GLASSMORPHISM & ANIMATION CSS
+# FLIGHTRADAR-STYLE JETLINER SVG ICON (BASE64 DATA URI FOR PYDECK ICONLAYER)
+# -----------------------------------------------------------------------------
+_AIRLINER_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <path fill="#ffffff" d="M64 6 C67 6 69 12 69 22 L69 46 L116 74 L116 84 L69 68 L69 98 L88 112 L88 120 L64 113 L40 120 L40 112 L59 98 L59 68 L12 84 L12 74 L59 46 L59 22 C59 12 61 6 64 6 Z"/>
+</svg>"""
+AIRLINER_ICON_URL = "data:image/svg+xml;base64," + base64.b64encode(_AIRLINER_SVG.encode("utf-8")).decode("ascii")
+
+# -----------------------------------------------------------------------------
+# LUFTHANSA TECHNIK / INDUSTRIAL AVIONICS STYLING & ANIMATIONS
 # -----------------------------------------------------------------------------
 st.markdown(
     """
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
 
     :root {
-        --bg-base: #060913;
-        --glass-bg: rgba(15, 23, 42, 0.56);
-        --glass-bg-hover: rgba(20, 30, 54, 0.72);
-        --glass-border: rgba(148, 163, 184, 0.14);
-        --glass-border-bright: rgba(56, 189, 248, 0.35);
-        --accent-sky: #38bdf8;
-        --accent-indigo: #818cf8;
-        --accent-teal: #2dd4bf;
-        --accent-amber: #fbbf24;
-        --accent-rose: #fb7185;
-        --text-main: #f1f5f9;
-        --text-muted: #94a3b8;
+        --bg-carbon: #0B0C0E;
+        --bg-panel: #111317;
+        --bg-elevated: #16191F;
+        --bg-input: #1C2028;
+        --border-hairline: #262B34;
+        --border-active: #3F4654;
+        --gold-primary: #FFB400;
+        --gold-dim: rgba(255, 180, 0, 0.14);
+        --titanium: #E5E7EB;
+        --steel-muted: #8E95A2;
+        --emerald-ok: #10B981;
+        --copper-cargo: #F97316;
+        --crimson-caution: #EF4444;
     }
 
-    /* Keyframe Animations */
-    @keyframes auroraDrift {
-        0%   { background-position: 0% 50%, 100% 0%, 50% 100%; }
-        50%  { background-position: 100% 50%, 0% 100%, 50% 0%; }
-        100% { background-position: 0% 50%, 100% 0%, 50% 100%; }
+    /* Hide Sidebar & Default Streamlit Chrome Completely */
+    [data-testid="stSidebar"],
+    [data-testid="collapsedControl"],
+    button[kind="header"],
+    #MainMenu,
+    footer {
+        display: none !important;
+        visibility: hidden !important;
     }
 
-    @keyframes fadeSlideUp {
-        0% {
-            opacity: 0;
-            transform: translateY(14px) scale(0.99);
-        }
-        100% {
-            opacity: 1;
-            transform: translateY(0) scale(1);
-        }
-    }
-
-    @keyframes shimmerBeam {
-        0%   { transform: translateX(-100%); }
-        100% { transform: translateX(200%); }
-    }
-
-    @keyframes liveRipple {
-        0%   { transform: scale(0.9); opacity: 0.9; }
-        70%  { transform: scale(2.1); opacity: 0; }
-        100% { transform: scale(2.1); opacity: 0; }
-    }
-
-    /* Main App Canvas with Subtle Moving Aurora Mesh */
-    .stApp {
-        background-color: var(--bg-base);
-        background-image:
-            radial-gradient(circle at 12% 18%, rgba(56, 189, 248, 0.10) 0%, transparent 42%),
-            radial-gradient(circle at 86% 12%, rgba(129, 140, 248, 0.10) 0%, transparent 40%),
-            radial-gradient(circle at 55% 88%, rgba(45, 212, 191, 0.07) 0%, transparent 45%);
-        background-size: 140% 140%;
-        animation: auroraDrift 22s ease-in-out infinite;
-        color: var(--text-main);
-        font-family: 'Inter', sans-serif;
-    }
-
-    #MainMenu, footer { visibility: hidden; }
     header[data-testid="stHeader"] {
-        background: rgba(6, 9, 19, 0.55);
-        backdrop-filter: blur(12px);
-        border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+        background: rgba(11, 12, 14, 0.85);
+        border-bottom: 1px solid var(--border-hairline);
+        height: 2.2rem;
+    }
+
+    /* Precision Keyframe Animations */
+    @keyframes panelReveal {
+        0%   { opacity: 0; transform: translateY(10px); }
+        100% { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes horizonScan {
+        0%   { transform: translateX(-100%); opacity: 0.2; }
+        50%  { opacity: 1; }
+        100% { transform: translateX(320%); opacity: 0.2; }
+    }
+
+    @keyframes signalEq {
+        0%, 100% { transform: scaleY(0.35); opacity: 0.55; }
+        50%      { transform: scaleY(1.0); opacity: 1.0; }
+    }
+
+    @keyframes barFill {
+        0%   { transform: scaleX(0); }
+        100% { transform: scaleX(1); }
+    }
+
+    @keyframes cautionPulse {
+        0%, 100% { opacity: 1; }
+        50%      { opacity: 0.45; }
+    }
+
+    /* Base App Canvas */
+    .stApp {
+        background-color: var(--bg-carbon);
+        background-image:
+            linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(255, 255, 255, 0.018) 1px, transparent 1px);
+        background-size: 48px 48px;
+        color: var(--titanium);
+        font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+        font-variant-numeric: tabular-nums;
     }
 
     .block-container {
-        padding: 1.4rem 2.2rem 2.5rem 2.2rem;
+        padding: 1.1rem 2rem 2.5rem 2rem;
         max-width: 100%;
     }
 
-    /* Sidebar Glass Panel */
-    [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, rgba(10, 15, 29, 0.96) 0%, rgba(7, 11, 22, 0.98) 100%);
-        border-right: 1px solid var(--glass-border);
-        backdrop-filter: blur(16px);
+    /* Form Controls Restyled to Industrial Avionics */
+    div[data-baseweb="select"] > div,
+    div[data-baseweb="input"] > div {
+        background-color: var(--bg-input) !important;
+        border: 1px solid var(--border-hairline) !important;
+        border-radius: 4px !important;
+        color: var(--titanium) !important;
+        font-family: 'IBM Plex Mono', monospace !important;
+        font-size: 0.82rem !important;
+    }
+    div[data-baseweb="select"] > div:hover,
+    div[data-baseweb="input"] > div:hover {
+        border-color: var(--gold-primary) !important;
+    }
+    label[data-testid="stWidgetLabel"] p {
+        font-family: 'IBM Plex Mono', monospace !important;
+        font-size: 0.68rem !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.1em !important;
+        color: var(--steel-muted) !important;
     }
 
-    /* Primary Buttons */
-    div.stButton > button {
-        background: linear-gradient(135deg, rgba(56, 189, 248, 0.16), rgba(129, 140, 248, 0.18));
-        color: #f8fafc;
-        border: 1px solid rgba(56, 189, 248, 0.35);
-        border-radius: 10px;
-        font-family: 'Space Grotesk', sans-serif;
-        font-size: 0.9rem;
+    /* Action Buttons */
+    div.stButton > button,
+    div.stDownloadButton > button {
+        background-color: var(--bg-input);
+        color: var(--gold-primary);
+        border: 1px solid rgba(255, 180, 0, 0.45);
+        border-radius: 3px;
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 0.76rem;
         font-weight: 600;
-        letter-spacing: 0.04em;
-        height: 44px;
-        transition: all 0.25s cubic-bezier(0.22, 1, 0.36, 1);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        height: 40px;
+        transition: all 0.2s cubic-bezier(0.22, 1, 0.36, 1);
     }
-    div.stButton > button:hover {
-        background: linear-gradient(135deg, rgba(56, 189, 248, 0.32), rgba(129, 140, 248, 0.34));
-        border-color: var(--accent-sky);
+    div.stButton > button:hover,
+    div.stDownloadButton > button:hover {
+        background-color: var(--gold-primary);
+        color: #0B0C0E;
+        border-color: var(--gold-primary);
         transform: translateY(-1px);
-        box-shadow: 0 8px 24px rgba(56, 189, 248, 0.22);
-        color: #ffffff;
+        box-shadow: 0 6px 18px rgba(255, 180, 0, 0.18);
     }
 
-    /* Hero Banner */
-    .hero-shell {
+    /* Header Command Strip */
+    .eng-header {
         position: relative;
         overflow: hidden;
-        background: linear-gradient(135deg, rgba(15, 23, 42, 0.78) 0%, rgba(15, 23, 42, 0.48) 100%);
-        backdrop-filter: blur(18px);
-        border: 1px solid var(--glass-border);
-        border-radius: 16px;
-        padding: 1.25rem 1.65rem;
-        margin-bottom: 1.25rem;
+        background: var(--bg-panel);
+        border: 1px solid var(--border-hairline);
+        border-top: 2px solid var(--gold-primary);
+        border-radius: 4px;
+        padding: 1.1rem 1.5rem;
+        margin-bottom: 1rem;
         display: flex;
         flex-wrap: wrap;
         justify-content: space-between;
         align-items: center;
         gap: 1rem;
-        box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
-        animation: fadeSlideUp 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+        animation: panelReveal 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
     }
-    .hero-shell::after {
+    .eng-header::after {
         content: "";
         position: absolute;
         top: 0;
         left: 0;
-        width: 45%;
+        width: 28%;
         height: 2px;
-        background: linear-gradient(90deg, transparent, var(--accent-sky), var(--accent-indigo), transparent);
-        animation: shimmerBeam 5.5s ease-in-out infinite;
+        background: linear-gradient(90deg, transparent, #FFF3C4, var(--gold-primary), transparent);
+        animation: horizonScan 6s linear infinite;
     }
-    .brand-row {
+    .eng-brand-block {
         display: flex;
         align-items: center;
-        gap: 0.85rem;
+        gap: 1rem;
     }
-    .brand-logo {
-        width: 44px;
-        height: 44px;
-        border-radius: 12px;
-        background: linear-gradient(135deg, #0ea5e9 0%, #6366f1 100%);
+    .eng-mark {
+        width: 40px;
+        height: 40px;
+        border: 1px solid rgba(255, 180, 0, 0.45);
+        background: rgba(255, 180, 0, 0.08);
+        border-radius: 3px;
         display: flex;
         align-items: center;
         justify-content: center;
-        font-size: 1.35rem;
-        box-shadow: 0 6px 20px rgba(56, 189, 248, 0.35);
     }
-    .brand-title {
-        font-family: 'Space Grotesk', sans-serif;
-        font-size: 1.85rem;
+    .eng-title {
+        font-family: 'IBM Plex Sans', sans-serif;
+        font-size: 1.55rem;
         font-weight: 700;
-        letter-spacing: -0.02em;
-        background: linear-gradient(90deg, #ffffff 0%, #bae6fd 55%, #c7d2fe 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
+        letter-spacing: 0.08em;
+        color: #FFFFFF;
         line-height: 1.1;
     }
-    .brand-sub {
-        font-size: 0.8rem;
-        color: var(--text-muted);
-        letter-spacing: 0.04em;
-        margin-top: 0.2rem;
+    .eng-title span {
+        color: var(--gold-primary);
+        font-weight: 500;
+        font-size: 0.95rem;
+        letter-spacing: 0.14em;
+        margin-left: 0.5rem;
+    }
+    .eng-sub {
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 0.72rem;
+        color: var(--steel-muted);
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+        margin-top: 0.25rem;
     }
 
-    .hero-meta {
+    /* Live Signal Equalizer Badge */
+    .eng-status-group {
         display: flex;
         align-items: center;
         gap: 0.75rem;
         flex-wrap: wrap;
     }
-    .live-pill {
+    .sys-badge {
         display: inline-flex;
         align-items: center;
-        gap: 0.55rem;
-        padding: 0.42rem 0.9rem;
-        border-radius: 999px;
-        background: rgba(45, 212, 191, 0.10);
-        border: 1px solid rgba(45, 212, 191, 0.28);
-        color: #5eead4;
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 0.75rem;
-        font-weight: 500;
+        gap: 0.5rem;
+        background: var(--bg-elevated);
+        border: 1px solid var(--border-hairline);
+        padding: 0.42rem 0.8rem;
+        border-radius: 3px;
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 0.72rem;
+        letter-spacing: 0.06em;
+        color: var(--titanium);
     }
-    .live-dot-wrap {
-        position: relative;
-        width: 9px;
-        height: 9px;
+    .eq-bars {
+        display: inline-flex;
+        align-items: flex-end;
+        gap: 2px;
+        height: 12px;
     }
-    .live-dot-core {
-        position: absolute;
-        inset: 0;
-        border-radius: 50%;
-        background: #2dd4bf;
+    .eq-bar {
+        width: 2.5px;
+        height: 12px;
+        background: var(--emerald-ok);
+        transform-origin: bottom;
+        animation: signalEq 1.2s ease-in-out infinite;
     }
-    .live-dot-ring {
-        position: absolute;
-        inset: 0;
-        border-radius: 50%;
-        background: #2dd4bf;
-        animation: liveRipple 2s cubic-bezier(0.22, 1, 0.36, 1) infinite;
-    }
-    .author-pill {
-        padding: 0.42rem 0.9rem;
-        border-radius: 999px;
-        background: rgba(148, 163, 184, 0.08);
-        border: 1px solid var(--glass-border);
-        color: #cbd5e1;
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 0.74rem;
-    }
+    .eq-bar:nth-child(2) { animation-delay: 0.2s; height: 9px; }
+    .eq-bar:nth-child(3) { animation-delay: 0.4s; height: 12px; }
+    .eq-bar:nth-child(4) { animation-delay: 0.6s; height: 7px; }
 
-    /* Bento KPI Cards */
-    .kpi-card {
+    /* KPI Architectural Cards */
+    .metric-tile {
         position: relative;
-        background: var(--glass-bg);
-        backdrop-filter: blur(16px);
-        border: 1px solid var(--glass-border);
-        border-radius: 14px;
-        padding: 1.15rem 1.25rem;
-        margin-bottom: 1rem;
-        transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1), border-color 0.28s ease, box-shadow 0.28s ease, background 0.28s ease;
-        animation: fadeSlideUp 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
+        background: var(--bg-panel);
+        border: 1px solid var(--border-hairline);
+        border-radius: 4px;
+        padding: 1rem 1.15rem;
+        margin-bottom: 0.9rem;
+        overflow: hidden;
+        transition: border-color 0.22s ease, transform 0.22s ease, background-color 0.22s ease;
+        animation: panelReveal 0.55s cubic-bezier(0.16, 1, 0.3, 1) both;
     }
-    .kpi-card:hover {
-        transform: translateY(-3px);
-        background: var(--glass-bg-hover);
-        border-color: var(--glass-border-bright);
-        box-shadow: 0 14px 32px rgba(2, 6, 23, 0.55);
+    .metric-tile::after {
+        content: "";
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        width: 100%;
+        height: 2px;
+        background: var(--gold-primary);
+        transform: scaleX(0);
+        transform-origin: left;
+        transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
     }
-    .kpi-card.delay-1 { animation-delay: 0.05s; }
-    .kpi-card.delay-2 { animation-delay: 0.12s; }
-    .kpi-card.delay-3 { animation-delay: 0.19s; }
-    .kpi-card.delay-4 { animation-delay: 0.26s; }
+    .metric-tile:hover {
+        background: var(--bg-elevated);
+        border-color: var(--border-active);
+        transform: translateY(-2px);
+    }
+    .metric-tile:hover::after {
+        transform: scaleX(1);
+    }
+    .metric-tile.caution::after { background: var(--crimson-caution); }
+    .metric-tile.nominal::after { background: var(--emerald-ok); }
+    .metric-tile.delay-1 { animation-delay: 0.04s; }
+    .metric-tile.delay-2 { animation-delay: 0.10s; }
+    .metric-tile.delay-3 { animation-delay: 0.16s; }
+    .metric-tile.delay-4 { animation-delay: 0.22s; }
 
-    .kpi-top {
+    .m-head {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        margin-bottom: 0.55rem;
+        margin-bottom: 0.45rem;
     }
-    .kpi-label {
-        font-size: 0.74rem;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        color: var(--text-muted);
-    }
-    .kpi-badge {
-        font-family: 'JetBrains Mono', monospace;
+    .m-code {
+        font-family: 'IBM Plex Mono', monospace;
         font-size: 0.68rem;
-        padding: 0.16rem 0.5rem;
-        border-radius: 6px;
-        background: rgba(56, 189, 248, 0.12);
-        color: var(--accent-sky);
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--steel-muted);
     }
-    .kpi-badge.amber { background: rgba(251, 191, 36, 0.12); color: var(--accent-amber); }
-    .kpi-badge.rose  { background: rgba(251, 113, 133, 0.14); color: var(--accent-rose); }
-    .kpi-badge.teal  { background: rgba(45, 212, 191, 0.12); color: var(--accent-teal); }
+    .m-tag {
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 0.67rem;
+        padding: 0.12rem 0.42rem;
+        border-radius: 2px;
+        border: 1px solid var(--border-hairline);
+        color: var(--gold-primary);
+        background: rgba(255, 180, 0, 0.08);
+    }
+    .m-tag.emerald { color: var(--emerald-ok); background: rgba(16, 185, 129, 0.08); border-color: rgba(16, 185, 129, 0.25); }
+    .m-tag.copper  { color: var(--copper-cargo); background: rgba(249, 115, 22, 0.08); border-color: rgba(249, 115, 22, 0.25); }
+    .m-tag.crimson { color: var(--crimson-caution); background: rgba(239, 68, 68, 0.10); border-color: rgba(239, 68, 68, 0.3); }
 
-    .kpi-value {
-        font-family: 'Space Grotesk', sans-serif;
-        font-size: 2.15rem;
+    .m-val {
+        font-family: 'IBM Plex Sans', sans-serif;
+        font-size: 2.05rem;
         font-weight: 700;
         line-height: 1.05;
-        color: #ffffff;
+        color: #FFFFFF;
     }
-    .kpi-foot {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 0.73rem;
-        color: var(--text-muted);
-        margin-top: 0.5rem;
+    .m-sub {
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 0.71rem;
+        color: var(--steel-muted);
+        margin-top: 0.45rem;
+    }
+    .m-bar-track {
+        width: 100%;
+        height: 3px;
+        background: #20252E;
+        margin-top: 0.55rem;
+        border-radius: 1px;
+        overflow: hidden;
+    }
+    .m-bar-fill {
+        height: 100%;
+        transform-origin: left;
+        animation: barFill 0.9s cubic-bezier(0.16, 1, 0.3, 1) both;
     }
 
-    /* Macro Ribbon */
-    .macro-ribbon {
+    /* Macro Strip */
+    .macro-strip {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(175px, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
         gap: 0.75rem;
-        background: rgba(15, 23, 42, 0.45);
-        backdrop-filter: blur(14px);
-        border: 1px solid var(--glass-border);
-        border-radius: 14px;
-        padding: 0.9rem 1.25rem;
-        margin-bottom: 1.25rem;
-        animation: fadeSlideUp 0.7s cubic-bezier(0.22, 1, 0.36, 1) 0.15s both;
+        background: var(--bg-panel);
+        border: 1px solid var(--border-hairline);
+        border-left: 3px solid var(--gold-primary);
+        border-radius: 4px;
+        padding: 0.8rem 1.15rem;
+        margin-bottom: 1.1rem;
+        animation: panelReveal 0.6s cubic-bezier(0.16, 1, 0.3, 1) 0.12s both;
     }
-    .macro-item {
-        border-right: 1px solid rgba(148, 163, 184, 0.1);
+    .macro-cell {
+        border-right: 1px solid var(--border-hairline);
         padding-right: 0.75rem;
     }
-    .macro-item:last-child {
-        border-right: none;
-    }
+    .macro-cell:last-child { border-right: none; }
     .macro-k {
-        font-size: 0.68rem;
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 0.64rem;
         text-transform: uppercase;
-        letter-spacing: 0.08em;
-        color: var(--text-muted);
+        letter-spacing: 0.1em;
+        color: var(--steel-muted);
         margin-bottom: 0.2rem;
     }
     .macro-v {
-        font-family: 'Space Grotesk', sans-serif;
-        font-size: 1.02rem;
+        font-family: 'IBM Plex Sans', sans-serif;
+        font-size: 0.96rem;
         font-weight: 600;
-        color: #f8fafc;
+        color: #FFFFFF;
     }
 
-    /* Section Header */
-    .section-head {
+    /* Section Headings */
+    .sec-bar {
         display: flex;
         justify-content: space-between;
-        align-items: baseline;
-        margin: 0.5rem 0 0.9rem 0;
-        padding-bottom: 0.5rem;
-        border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+        align-items: center;
+        border-bottom: 1px solid var(--border-hairline);
+        padding-bottom: 0.45rem;
+        margin: 0.5rem 0 0.85rem 0;
     }
-    .section-title {
-        font-family: 'Space Grotesk', sans-serif;
-        font-size: 1.15rem;
+    .sec-title {
+        font-family: 'IBM Plex Sans', sans-serif;
+        font-size: 0.98rem;
         font-weight: 600;
-        color: #f8fafc;
-        letter-spacing: -0.01em;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: #FFFFFF;
     }
-    .section-caption {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 0.72rem;
-        color: var(--text-muted);
+    .sec-ref {
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 0.7rem;
+        color: var(--steel-muted);
+        letter-spacing: 0.06em;
     }
 
-    /* Glass Container Card for Family Spotlight */
-    .spotlight-grid {
+    /* Family Spotlight Grid */
+    .mro-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-        gap: 0.85rem;
-        margin: 0.85rem 0 1.4rem 0;
+        grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+        gap: 0.8rem;
+        margin: 0.8rem 0 1.25rem 0;
     }
-    .spotlight-box {
-        background: linear-gradient(145deg, rgba(56, 189, 248, 0.08), rgba(129, 140, 248, 0.05));
-        border: 1px solid rgba(56, 189, 248, 0.22);
-        border-radius: 12px;
-        padding: 0.95rem 1.1rem;
-        transition: transform 0.22s ease, border-color 0.22s ease;
+    .mro-box {
+        background: var(--bg-panel);
+        border: 1px solid var(--border-hairline);
+        border-top: 2px solid var(--border-active);
+        border-radius: 4px;
+        padding: 0.9rem 1.05rem;
+        transition: border-color 0.2s ease, transform 0.2s ease;
     }
-    .spotlight-box:hover {
+    .mro-box:hover {
+        border-top-color: var(--gold-primary);
         transform: translateY(-2px);
-        border-color: rgba(56, 189, 248, 0.48);
     }
 
-    /* Pill Tabs */
+    /* Tabs Styled Like Instrument Mode Selectors */
     .stTabs [data-baseweb="tab-list"] {
-        gap: 0.45rem;
-        background: rgba(15, 23, 42, 0.55);
-        backdrop-filter: blur(12px);
-        padding: 0.4rem;
-        border-radius: 12px;
-        border: 1px solid var(--glass-border);
+        gap: 0.35rem;
+        background: var(--bg-panel);
+        padding: 0.3rem;
+        border: 1px solid var(--border-hairline);
+        border-radius: 4px;
         margin-bottom: 1rem;
     }
     .stTabs [data-baseweb="tab"] {
-        font-family: 'Space Grotesk', sans-serif;
-        font-size: 0.88rem;
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 0.76rem;
         font-weight: 600;
-        color: var(--text-muted);
-        border-radius: 8px;
-        padding: 0.5rem 1.1rem;
-        transition: all 0.2s ease;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--steel-muted);
+        border-radius: 3px;
+        padding: 0.5rem 1.05rem;
+        transition: all 0.18s ease;
     }
     .stTabs [data-baseweb="tab"]:hover {
-        color: #f8fafc;
-        background: rgba(148, 163, 184, 0.08);
+        color: #FFFFFF;
+        background: var(--bg-elevated);
     }
     .stTabs [aria-selected="true"] {
-        background: linear-gradient(135deg, rgba(56, 189, 248, 0.22), rgba(129, 140, 248, 0.22)) !important;
-        color: #ffffff !important;
-        border: 1px solid rgba(56, 189, 248, 0.4) !important;
-        box-shadow: 0 4px 16px rgba(56, 189, 248, 0.14);
+        background-color: var(--gold-primary) !important;
+        color: #0B0C0E !important;
+        font-weight: 700 !important;
+    }
+    .stTabs [data-baseweb="tab-highlight"] {
+        display: none !important;
     }
 
     /* Clean Scrollbars */
     ::-webkit-scrollbar { width: 6px; height: 6px; }
-    ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, 0.25); border-radius: 999px; }
-    ::-webkit-scrollbar-thumb:hover { background: var(--accent-sky); }
+    ::-webkit-scrollbar-track { background: var(--bg-carbon); }
+    ::-webkit-scrollbar-thumb { background: #2D333F; border-radius: 2px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--gold-primary); }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
 # -----------------------------------------------------------------------------
-# HELPER FUNCTIONS (CORE LOGIC PRESERVED)
+# HELPER FUNCTIONS (CORE LOGIC PRESERVED + HEADING EXTRACTION FOR AIRLINER ICONS)
 # -----------------------------------------------------------------------------
 def safe_float(value, default=0.0):
     try:
@@ -445,6 +510,17 @@ def get_airspace_sector(lat, lon):
     if -50 <= lat <= 10 and 10 <= lon <= 50: return "AFRICAN ZONE"
     if -45 <= lat <= -10 and 110 <= lon <= 160: return "OCEANIC / AUSTRALASIA ZONE"
     return "INTERNATIONAL WATERS"
+
+def get_altitude_band(alt_ft):
+    if alt_ft < 10000:
+        return "01. LOW / APPROACH (<10K FT)"
+    if alt_ft < 28000:
+        return "02. CLIMB / DESCENT (10K-28K)"
+    if alt_ft < 36000:
+        return "03. MID CRUISE (28K-36K)"
+    if alt_ft <= 43000:
+        return "04. HIGH CRUISE (36K-43K)"
+    return "05. UPPER / STRATO (>43K FT)"
 
 def classify_airframe_taxonomy(icao_code):
     code = str(icao_code).upper().strip()
@@ -532,6 +608,7 @@ def fetch_global_fusion(api_key):
                     "longitude": float(ac.get("lon") or 0),
                     "baro_altitude": safe_float(ac.get("alt_baro")),
                     "velocity": safe_float(ac.get("gs")) * 1.852,
+                    "heading": safe_float(ac.get("track") if ac.get("track") is not None else ac.get("true_heading")),
                     "aircraft_type": str(ac.get("t", "")),
                     "airline_code": "MIL",
                     "military": True,
@@ -557,6 +634,7 @@ def fetch_global_fusion(api_key):
                     "longitude": float(ac.get("lng") or 0),
                     "baro_altitude": float(ac.get("alt") or 0) * 3.28084,
                     "velocity": float(ac.get("speed") or 0),
+                    "heading": safe_float(ac.get("dir")),
                     "aircraft_type": str(ac.get("aircraft_icao", "UNKN")).upper().strip(),
                     "flight_number": str(ac.get("flight_number", "UNKN")),
                     "airline_code": str(ac.get("airline_iata", "UNKN")).upper().strip(),
@@ -580,6 +658,11 @@ def fetch_global_fusion(api_key):
         df = pd.concat([df, mil_df[~mil_df["icao24"].isin(df["icao24"])]], ignore_index=True)
     if df.empty:
         return df
+
+    if "heading" not in df.columns:
+        df["heading"] = 0.0
+    else:
+        df["heading"] = df["heading"].fillna(0.0)
 
     if "Classification" not in df.columns:
         df["Classification"] = "CIVILIAN"
@@ -638,7 +721,7 @@ def get_macro_intelligence(_airline_map):
         flight_delta = ((current["total_flights"] - avg_flights) / avg_flights) * 100 if avg_flights > 0 else 0
 
         raw_apt = str(current.get("busiest_airport", "DFW")).upper()
-        apt_txt = f"{raw_apt} · {AIRPORT_MAP.get(raw_apt, 'Intl Hub')}"
+        apt_txt = f"{raw_apt} // {AIRPORT_MAP.get(raw_apt, 'Intl Hub')}"
         carrier_code = str(current.get("top_carrier", "UNKN")).upper()
         full_carrier_name = _airline_map.get(carrier_code, carrier_code)
 
@@ -671,83 +754,107 @@ def get_macro_intelligence(_airline_map):
         return None
 
 # -----------------------------------------------------------------------------
-# PLOTLY THEME HELPER
+# PLOTLY INDUSTRIAL GRAPHITE CHART STYLING (ZERO BLUE / ZERO PURPLE)
 # -----------------------------------------------------------------------------
-def style_plotly(fig, height=320):
+def style_eng_chart(fig, height=320):
     fig.update_layout(
         height=height,
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(15, 23, 42, 0.35)",
-        font=dict(color="#cbd5e1", family="Inter, sans-serif", size=12),
-        margin=dict(l=12, r=18, t=22, b=16),
+        paper_bgcolor="rgba(17, 19, 23, 0.95)",
+        plot_bgcolor="rgba(11, 12, 14, 0.85)",
+        font=dict(color="#D1D5DB", family="IBM Plex Mono, monospace", size=11),
+        margin=dict(l=14, r=20, t=26, b=16),
+        transition={"duration": 500, "easing": "cubic-in-out"},
         hoverlabel=dict(
-            bgcolor="rgba(15, 23, 42, 0.95)",
-            bordercolor="rgba(56, 189, 248, 0.45)",
-            font=dict(color="#f8fafc", family="JetBrains Mono, monospace", size=12),
+            bgcolor="#16191F",
+            bordercolor="#FFB400",
+            font=dict(color="#FFFFFF", family="IBM Plex Mono, monospace", size=11),
         ),
     )
-    fig.update_xaxes(gridcolor="rgba(148, 163, 184, 0.08)", zeroline=False)
-    fig.update_yaxes(gridcolor="rgba(148, 163, 184, 0.08)", zeroline=False)
+    fig.update_xaxes(gridcolor="rgba(255, 255, 255, 0.05)", zeroline=False, linecolor="#262B34")
+    fig.update_yaxes(gridcolor="rgba(255, 255, 255, 0.05)", zeroline=False, linecolor="#262B34")
     return fig
 
 # -----------------------------------------------------------------------------
-# FETCH LIVE DATA
+# DATA INGESTION
 # -----------------------------------------------------------------------------
 dynamic_airline_map = fetch_dynamic_airline_map(client.api_key)
 dynamic_airline_map["MIL"] = "State / Military Operator"
 
 raw_df = fetch_global_fusion(client.api_key)
 macro = get_macro_intelligence(dynamic_airline_map)
+utc_now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 if not raw_df.empty:
     # -------------------------------------------------------------------------
-    # SIDEBAR WORKSPACE CONTROLS
+    # EXECUTIVE ENGINEERING HEADER
     # -------------------------------------------------------------------------
-    with st.sidebar:
-        st.markdown(
-            """
-            <div style="padding: 0.4rem 0 0.8rem 0; border-bottom: 1px solid rgba(148,163,184,0.14); margin-bottom: 1rem;">
-                <div style="font-family:'Space Grotesk',sans-serif; font-size:1.15rem; font-weight:700; color:#f8fafc;">
-                    ✈️ Flight Deck Controls
+    st.markdown(
+        f"""
+        <div class="eng-header">
+            <div class="eng-brand-block">
+                <div class="eng-mark">
+                    <svg width="22" height="22" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+                        <path fill="#FFB400" d="M64 6 C67 6 69 12 69 22 L69 46 L116 74 L116 84 L69 68 L69 98 L88 112 L88 120 L64 113 L40 120 L40 112 L59 98 L59 68 L12 84 L12 74 L59 46 L59 22 C59 12 61 6 64 6 Z"/>
+                    </svg>
                 </div>
-                <div style="font-size:0.75rem; color:#94a3b8; margin-top:0.15rem;">
-                    Global telemetry filters &amp; viewport
+                <div>
+                    <div class="eng-title">AEROTRACK <span>FLEET TELEMETRY &amp; MRO INTELLIGENCE</span></div>
+                    <div class="eng-sub">SYS.REF // GLOBAL ADS-B FUSION CORE &bull; AIRFRAME TAXONOMY &bull; ENVELOPE MONITORING</div>
                 </div>
             </div>
-            """,
-            unsafe_allow_html=True,
-        )
+            <div class="eng-status-group">
+                <div class="sys-badge">
+                    <div class="eq-bars">
+                        <div class="eq-bar"></div>
+                        <div class="eq-bar"></div>
+                        <div class="eq-bar"></div>
+                        <div class="eq-bar"></div>
+                    </div>
+                    STREAMING // {utc_now}
+                </div>
+                <div class="sys-badge">
+                    SATVIK GOYAL &bull; @satvik-7773
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-        class_filter = st.radio(
-            "Asset Classification",
+    # -------------------------------------------------------------------------
+    # INLINE OPERATIONS FILTER DECK (REPLACES SIDEBAR)
+    # -------------------------------------------------------------------------
+    f1, f2, f3, f4, f5 = st.columns([1.2, 1.4, 1.4, 1.3, 0.9], gap="small")
+
+    with f1:
+        class_filter = st.selectbox(
+            "CLASSIFICATION",
             ["ALL ASSETS", "CIVILIAN ONLY", "MILITARY ONLY", "FLAGGED ANOMALIES"],
         )
-
+    with f2:
         sector_list = ["GLOBAL (ALL)"] + sorted(list(raw_df["sector"].unique()))
-        region_filter = st.selectbox("Geographic Zone", sector_list)
-
+        region_filter = st.selectbox("AIRSPACE SECTOR", sector_list)
+    with f3:
         min_alt = int(raw_df["baro_altitude"].fillna(0).min())
         max_alt = int(raw_df["baro_altitude"].fillna(0).max())
         if min_alt >= max_alt:
             max_alt = min_alt + 1000
         alt_filter = st.slider(
-            "Altitude Envelope (ft)",
+            "ALTITUDE ENVELOPE (FT)",
             min_value=min_alt,
             max_value=max_alt,
             value=(min_alt, max_alt),
             step=1000,
         )
-
-        search_query = st.text_input("Search Callsign / Hex / Carrier", placeholder="e.g. DAL, A359, 4ca...")
-
-        st.markdown("---")
-        map_pitch = st.toggle("3D Globe Perspective", value=True, help="Tilts the global map for atmospheric depth.")
-
-        if st.button("✨ Refresh Global Telemetry", use_container_width=True):
+    with f4:
+        search_query = st.text_input("CALLSIGN / HEX / ICAO TYPE", placeholder="FILTER E.G. DLH, A359, 3C6...")
+    with f5:
+        st.markdown("<div style='height: 22px;'></div>", unsafe_allow_html=True)
+        if st.button("RESYNC FEED", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
 
-    # Apply Filters
+    # Apply Inline Filters
     df = raw_df.copy()
     if class_filter == "CIVILIAN ONLY":
         df = df[df["Classification"] == "CIVILIAN"]
@@ -770,75 +877,53 @@ if not raw_df.empty:
             | df["aircraft_type"].astype(str).str.lower().str.contains(q, na=False)
         ]
 
-    # Compute KPI Metrics
+    # Compute Operational KPIs
     total_active = len(df)
-    civilian_cnt = int((df["Classification"] == "CIVILIAN").sum())
+    civ_cnt = int((df["Classification"] == "CIVILIAN").sum())
     mil_cnt = int((df["military"] == True).sum())
     anom_cnt = int((df["Classification"] == "ANOMALY").sum())
+
     nextgen_pct = (df["Generation"] == "Next-Gen").mean() * 100 if total_active > 0 else 0.0
+    civ_pct = (civ_cnt / total_active * 100) if total_active > 0 else 0.0
+    mil_pct = (mil_cnt / total_active * 100) if total_active > 0 else 0.0
+    anom_pct = (anom_cnt / total_active * 100) if total_active > 0 else 0.0
+
     avg_speed = df["velocity"].mean() if total_active > 0 else 0.0
     avg_alt = df["baro_altitude"].mean() if total_active > 0 else 0.0
-    anom_rate = (anom_cnt / total_active * 100) if total_active > 0 else 0.0
-    mil_rate = (mil_cnt / total_active * 100) if total_active > 0 else 0.0
+    active_carriers = df[~df["airline_code"].isin(["UNKN", "", "MIL"])]["airline_code"].nunique() if total_active > 0 else 0
+    active_airframes = df[df["aircraft_type"] != "UNKN"]["aircraft_type"].nunique() if total_active > 0 else 0
 
     # -------------------------------------------------------------------------
-    # HERO HEADER BANNER
-    # -------------------------------------------------------------------------
-    st.markdown(
-        f"""
-        <div class="hero-shell">
-            <div class="brand-row">
-                <div class="brand-logo">✈️</div>
-                <div>
-                    <div class="brand-title">AEROTRACK</div>
-                    <div class="brand-sub">Global Aviation Telemetry, Fleet Taxonomy &amp; Airspace Analytics</div>
-                </div>
-            </div>
-            <div class="hero-meta">
-                <div class="live-pill">
-                    <div class="live-dot-wrap">
-                        <div class="live-dot-ring"></div>
-                        <div class="live-dot-core"></div>
-                    </div>
-                    LIVE GLOBAL FUSION
-                </div>
-                <div class="author-pill">SATVIK GOYAL &bull; @satvik-7773</div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # -------------------------------------------------------------------------
-    # BENTO KPI ROW
+    # PRIMARY TELEMETRY KPI TILES
     # -------------------------------------------------------------------------
     k1, k2, k3, k4 = st.columns(4)
     with k1:
         st.markdown(
             f"""
-            <div class="kpi-card delay-1">
-                <div class="kpi-top">
-                    <span class="kpi-label">Active Aircraft</span>
-                    <span class="kpi-badge">{nextgen_pct:.1f}% Next-Gen</span>
+            <div class="metric-tile delay-1">
+                <div class="m-head">
+                    <span class="m-code">TRACKED AIRFRAMES</span>
+                    <span class="m-tag emerald">NEXT-GEN {nextgen_pct:.1f}%</span>
                 </div>
-                <div class="kpi-value">{total_active:,}</div>
-                <div class="kpi-foot">Avg Cruise: {avg_speed:,.0f} km/h · {avg_alt:,.0f} ft</div>
+                <div class="m-val">{total_active:,}</div>
+                <div class="m-sub">AVG CRUISE: {avg_speed:,.0f} KM/H &bull; FL{int(avg_alt/100):03d} &bull; {active_airframes} TYPES</div>
+                <div class="m-bar-track"><div class="m-bar-fill" style="width:{min(nextgen_pct, 100):.1f}%; background:#10B981;"></div></div>
             </div>
             """,
             unsafe_allow_html=True,
         )
 
     with k2:
-        civ_pct = (civilian_cnt / total_active * 100) if total_active > 0 else 0.0
         st.markdown(
             f"""
-            <div class="kpi-card delay-2">
-                <div class="kpi-top">
-                    <span class="kpi-label">Commercial Fleet</span>
-                    <span class="kpi-badge teal">{civ_pct:.1f}% Share</span>
+            <div class="metric-tile delay-2">
+                <div class="m-head">
+                    <span class="m-code">COMMERCIAL OPERATIONS</span>
+                    <span class="m-tag">{civ_pct:.1f}% SHARE</span>
                 </div>
-                <div class="kpi-value" style="color:#38bdf8;">{civilian_cnt:,}</div>
-                <div class="kpi-foot">{df['airline_code'].nunique():,} active carrier codes</div>
+                <div class="m-val" style="color:#FFB400;">{civ_cnt:,}</div>
+                <div class="m-sub">ACTIVE OPERATORS: {active_carriers:,} AIRLINE CODES</div>
+                <div class="m-bar-track"><div class="m-bar-fill" style="width:{min(civ_pct, 100):.1f}%; background:#FFB400;"></div></div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -847,13 +932,14 @@ if not raw_df.empty:
     with k3:
         st.markdown(
             f"""
-            <div class="kpi-card delay-3">
-                <div class="kpi-top">
-                    <span class="kpi-label">State &amp; Gov Flights</span>
-                    <span class="kpi-badge amber">{mil_rate:.1f}% Share</span>
+            <div class="metric-tile delay-3">
+                <div class="m-head">
+                    <span class="m-code">STATE &amp; DEFENSE TRAFFIC</span>
+                    <span class="m-tag copper">{mil_pct:.1f}% SHARE</span>
                 </div>
-                <div class="kpi-value" style="color:#fbbf24;">{mil_cnt:,}</div>
-                <div class="kpi-foot">ADS-B Exchange + ICAO State fusion</div>
+                <div class="m-val" style="color:#F97316;">{mil_cnt:,}</div>
+                <div class="m-sub">SOURCE: ADSB.LOL MIL + ICAO STATE REGISTRY</div>
+                <div class="m-bar-track"><div class="m-bar-fill" style="width:{min(mil_pct * 3, 100):.1f}%; background:#F97316;"></div></div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -862,46 +948,47 @@ if not raw_df.empty:
     with k4:
         st.markdown(
             f"""
-            <div class="kpi-card delay-4">
-                <div class="kpi-top">
-                    <span class="kpi-label">Telemetry Anomalies</span>
-                    <span class="kpi-badge rose">{anom_rate:.2f}% Rate</span>
+            <div class="metric-tile caution delay-4">
+                <div class="m-head">
+                    <span class="m-code">ENVELOPE ANOMALIES</span>
+                    <span class="m-tag crimson">{anom_pct:.2f}% RATE</span>
                 </div>
-                <div class="kpi-value" style="color:#fb7185;">{anom_cnt:,}</div>
-                <div class="kpi-foot">Altitude / envelope / speed flags</div>
+                <div class="m-val" style="color:{'#EF4444' if anom_cnt > 0 else '#10B981'};">{anom_cnt:,}</div>
+                <div class="m-sub">CEILING / OVERSPEED / TELEMETRY INTEGRITY</div>
+                <div class="m-bar-track"><div class="m-bar-fill" style="width:{min(anom_pct * 10, 100):.1f}%; background:#EF4444;"></div></div>
             </div>
             """,
             unsafe_allow_html=True,
         )
 
     # -------------------------------------------------------------------------
-    # MACRO INTELLIGENCE RIBBON
+    # MACRO INTELLIGENCE TELEMETRY STRIP
     # -------------------------------------------------------------------------
     if macro:
         delta_val = float(macro["density_delta"].strip("%"))
-        delta_color = "#2dd4bf" if delta_val >= 0 else "#fb7185"
+        delta_col = "#10B981" if delta_val >= 0 else "#EF4444"
         st.markdown(
             f"""
-            <div class="macro-ribbon">
-                <div class="macro-item">
-                    <div class="macro-k">Global Asset Density</div>
-                    <div class="macro-v">{macro['density']} <span style="color:{delta_color}; font-size:0.8rem; font-family:'JetBrains Mono',monospace;">{macro['density_delta']}</span></div>
+            <div class="macro-strip">
+                <div class="macro-cell">
+                    <div class="macro-k">GLOBAL ASSET DENSITY</div>
+                    <div class="macro-v">{macro['density']} <span style="color:{delta_col}; font-family:'IBM Plex Mono',monospace; font-size:0.78rem;">[{macro['density_delta']}]</span></div>
                 </div>
-                <div class="macro-item">
-                    <div class="macro-k">Macro Anomaly Index</div>
-                    <div class="macro-v" style="color:#fb7185;">{macro['threat_pct']}</div>
+                <div class="macro-cell">
+                    <div class="macro-k">MACRO ANOMALY INDEX</div>
+                    <div class="macro-v" style="color:#EF4444;">{macro['threat_pct']}</div>
                 </div>
-                <div class="macro-item">
-                    <div class="macro-k">State / Gov Index</div>
-                    <div class="macro-v" style="color:#fbbf24;">{macro['mil_pct']}</div>
+                <div class="macro-cell">
+                    <div class="macro-k">STATE / GOV INDEX</div>
+                    <div class="macro-v" style="color:#F97316;">{macro['mil_pct']}</div>
                 </div>
-                <div class="macro-item">
-                    <div class="macro-k">Busiest Zone</div>
-                    <div class="macro-v" style="color:#38bdf8;">{macro['region']}</div>
+                <div class="macro-cell">
+                    <div class="macro-k">PEAK TRAFFIC ZONE</div>
+                    <div class="macro-v" style="color:#FFB400;">{macro['region']}</div>
                 </div>
-                <div class="macro-item">
-                    <div class="macro-k">Busiest Global Hub</div>
-                    <div class="macro-v" style="color:#c7d2fe;">{macro['airport']}</div>
+                <div class="macro-cell">
+                    <div class="macro-k">PRIMARY GLOBAL HUB</div>
+                    <div class="macro-v">{macro['airport']}</div>
                 </div>
             </div>
             """,
@@ -909,28 +996,28 @@ if not raw_df.empty:
         )
 
     # -------------------------------------------------------------------------
-    # MAIN NAVIGATION TABS
+    # WORKSPACE NAVIGATION TABS
     # -------------------------------------------------------------------------
-    tab_map, tab_market, tab_family, tab_log = st.tabs([
-        "🌐 Live Airspace & Trends",
-        "📊 Fleet, Carriers & Cargo",
-        "✈️ Airframes & Regions",
-        "📋 Flight Intelligence Log",
+    tab_globe, tab_ops, tab_mro, tab_log = st.tabs([
+        "01 // 3D GLOBAL TRAFFIC & TRENDS",
+        "02 // OPERATORS, CARGO & ENVELOPE",
+        "03 // AIRFRAME MRO & REGIONAL HHI",
+        "04 // FLIGHT TELEMETRY LOG",
     ])
 
     # =========================================================================
-    # TAB 1: LIVE GLOBAL MAP + 24H VOLUME TRENDLINE
+    # TAB 1: 3D GLOBE WITH REAL AIRLINER MARKERS + 24H TRENDLINE
     # =========================================================================
-    with tab_map:
+    with tab_globe:
         st.markdown(
             f"""
-            <div class="section-head">
-                <div class="section-title">Global Live Flight Map</div>
-                <div class="section-caption">
-                    <span style="color:#38bdf8;">● Commercial</span> &nbsp;&nbsp;
-                    <span style="color:#fbbf24;">● State / Gov</span> &nbsp;&nbsp;
-                    <span style="color:#fb7185;">● Anomaly</span> &nbsp;|&nbsp;
-                    {len(df):,} plotted tracks
+            <div class="sec-bar">
+                <div class="sec-title">3D Global Airspace Traffic — Live Vector Layer</div>
+                <div class="sec-ref">
+                    <span style="color:#FFB400;">COMMERCIAL</span> &bull;
+                    <span style="color:#F97316;">STATE / MIL</span> &bull;
+                    <span style="color:#EF4444;">ANOMALY</span> &nbsp;|&nbsp;
+                    {len(df):,} ACTIVE AIRFRAMES
                 </div>
             </div>
             """,
@@ -938,80 +1025,87 @@ if not raw_df.empty:
         )
 
         if df.empty:
-            st.info("No aircraft match your current filter selection.")
+            st.info("No aircraft match the current filter criteria.")
         else:
-            def assign_core_color(cls):
+            def assign_aircraft_color(cls):
                 if cls == "ANOMALY":
-                    return [251, 113, 133, 240]
+                    return [239, 68, 68, 250]     # Caution Crimson
                 elif cls == "MILITARY":
-                    return [251, 191, 36, 235]
-                return [56, 189, 248, 175]
-
-            def assign_halo_color(cls):
-                if cls == "ANOMALY":
-                    return [251, 113, 133, 75]
-                elif cls == "MILITARY":
-                    return [251, 191, 36, 65]
-                return [56, 189, 248, 28]
+                    return [249, 115, 22, 240]    # Defense Copper
+                return [255, 180, 0, 230]         # Lufthansa Aviation Gold
 
             map_df = df.copy()
-            map_df["core_color"] = map_df["Classification"].apply(assign_core_color)
-            map_df["halo_color"] = map_df["Classification"].apply(assign_halo_color)
+            map_df["color"] = map_df["Classification"].apply(assign_aircraft_color)
+            map_df["angle"] = (360.0 - map_df["heading"].fillna(0.0)) % 360.0
+            map_df["icon_size"] = np.where(
+                map_df["Classification"] == "ANOMALY",
+                24,
+                np.where(map_df["Classification"] == "MILITARY", 20, 16),
+            )
+            map_df["icon_data"] = [
+                {
+                    "url": AIRLINER_ICON_URL,
+                    "width": 128,
+                    "height": 128,
+                    "anchorX": 64,
+                    "anchorY": 64,
+                    "mask": True,
+                }
+            ] * len(map_df)
             map_df["baro_altitude_fmt"] = map_df["baro_altitude"].round(0).astype(int)
             map_df["velocity_fmt"] = map_df["velocity"].round(0).astype(int)
+            map_df["heading_fmt"] = map_df["heading"].round(0).astype(int)
 
-            halo_layer = pdk.Layer(
-                "ScatterplotLayer",
+            airliner_layer = pdk.Layer(
+                "IconLayer",
                 data=map_df,
+                get_icon="icon_data",
                 get_position="[longitude, latitude]",
-                get_fill_color="halo_color",
-                get_radius=18000,
-                radius_min_pixels=6,
-                radius_max_pixels=18,
-                pickable=False,
-            )
-            core_layer = pdk.Layer(
-                "ScatterplotLayer",
-                data=map_df,
-                get_position="[longitude, latitude]",
-                get_fill_color="core_color",
-                get_radius=4500,
-                radius_min_pixels=2.5,
-                radius_max_pixels=8,
+                get_size="icon_size",
+                size_scale=1,
+                size_min_pixels=11,
+                size_max_pixels=26,
+                get_angle="angle",
+                get_color="color",
+                billboard=False,
                 pickable=True,
             )
 
             st.pydeck_chart(
                 pdk.Deck(
-                    layers=[halo_layer, core_layer],
+                    layers=[airliner_layer],
                     initial_view_state=pdk.ViewState(
-                        latitude=22,
-                        longitude=5,
-                        zoom=1.55,
-                        pitch=32 if map_pitch else 0,
+                        latitude=24,
+                        longitude=8,
+                        zoom=1.65,
+                        pitch=42,
+                        bearing=0,
                     ),
                     tooltip={
                         "html": """
-                            <div style="font-family: 'Inter', sans-serif; padding: 4px 2px;">
-                                <div style="font-weight:700; font-size:13px; color:#f8fafc; margin-bottom:3px;">
-                                    {callsign} <span style="color:#94a3b8; font-weight:400;">({icao24})</span>
+                            <div style="font-family: 'IBM Plex Mono', monospace; padding: 6px 4px; min-width: 190px;">
+                                <div style="display:flex; justify-content:space-between; border-bottom:1px solid #262B34; padding-bottom:4px; margin-bottom:5px;">
+                                    <strong style="color:#FFB400; font-size:12px;">{callsign}</strong>
+                                    <span style="color:#8E95A2; font-size:11px;">{icao24}</span>
                                 </div>
-                                <div style="font-size:11px; color:#cbd5e1; margin-bottom:4px;">
+                                <div style="color:#E5E7EB; font-size:11px; margin-bottom:4px;">
                                     {aircraft_type} &bull; {Family} ({Generation})
                                 </div>
-                                <div style="font-family:'JetBrains Mono', monospace; font-size:11px; color:#38bdf8;">
-                                    ALT {baro_altitude_fmt} ft &nbsp;|&nbsp; SPD {velocity_fmt} km/h
+                                <div style="color:#9CA3AF; font-size:11px;">
+                                    ALT: <span style="color:#FFFFFF;">{baro_altitude_fmt} FT</span> &nbsp;|&nbsp;
+                                    SPD: <span style="color:#FFFFFF;">{velocity_fmt} KM/H</span>
                                 </div>
-                                <div style="margin-top:4px; font-size:10px; font-weight:700; color:#fbbf24; letter-spacing:0.06em;">
-                                    {Classification}
+                                <div style="color:#9CA3AF; font-size:11px; margin-top:2px;">
+                                    HDG: <span style="color:#FFFFFF;">{heading_fmt}°</span> &nbsp;|&nbsp;
+                                    STS: <span style="color:#FFB400; font-weight:600;">{Classification}</span>
                                 </div>
                             </div>
                         """,
                         "style": {
-                            "backgroundColor": "rgba(15, 23, 42, 0.94)",
-                            "border": "1px solid rgba(56, 189, 248, 0.35)",
-                            "borderRadius": "10px",
-                            "boxShadow": "0 10px 25px rgba(0,0,0,0.45)",
+                            "backgroundColor": "#111317",
+                            "border": "1px solid #FFB400",
+                            "borderRadius": "3px",
+                            "boxShadow": "0 8px 24px rgba(0,0,0,0.65)",
                         },
                     },
                     map_style="mapbox://styles/mapbox/dark-v11",
@@ -1019,19 +1113,18 @@ if not raw_df.empty:
                 use_container_width=True,
             )
 
-        # 24-Hour Macro Trendline (Upgraded Spline Dual-Axis Area Chart)
+        # 24-Hour Global Flight & Anomaly Volume Trendline
         if macro and macro.get("history_df") is not None and not macro["history_df"].empty:
             hist = macro["history_df"]
             st.markdown(
                 """
-                <div class="section-head" style="margin-top: 1.4rem;">
-                    <div class="section-title">24-Hour Global Flight &amp; Anomaly Volume Trend</div>
-                    <div class="section-caption">SUPABASE TELEMETRY SNAPSHOTS</div>
+                <div class="sec-bar" style="margin-top: 1.25rem;">
+                    <div class="sec-title">24-Hour Global Fleet Volume &amp; Anomaly Trendline</div>
+                    <div class="sec-ref">HISTORICAL TELEMETRY SERIES // SUPABASE</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
-
             trend_fig = make_subplots(specs=[[{"secondary_y": True}]])
             trend_fig.add_trace(
                 go.Scatter(
@@ -1039,9 +1132,9 @@ if not raw_df.empty:
                     y=hist["Global Commercial Volume"],
                     name="Global Commercial Volume",
                     mode="lines",
-                    line=dict(color="#38bdf8", width=2.8, shape="spline"),
+                    line=dict(color="#FFB400", width=2.5, shape="spline"),
                     fill="tozeroy",
-                    fillcolor="rgba(56, 189, 248, 0.14)",
+                    fillcolor="rgba(255, 180, 0, 0.10)",
                 ),
                 secondary_y=False,
             )
@@ -1051,8 +1144,8 @@ if not raw_df.empty:
                     y=hist["Active State / Gov Assets"],
                     name="State / Gov Assets",
                     mode="lines+markers",
-                    line=dict(color="#fbbf24", width=2, shape="spline"),
-                    marker=dict(size=5),
+                    line=dict(color="#E5E7EB", width=1.8, shape="spline"),
+                    marker=dict(size=4),
                 ),
                 secondary_y=True,
             )
@@ -1062,36 +1155,35 @@ if not raw_df.empty:
                     y=hist["Flagged Anomalies"],
                     name="Flagged Anomalies",
                     mode="lines+markers",
-                    line=dict(color="#fb7185", width=2, shape="spline"),
-                    marker=dict(size=5),
+                    line=dict(color="#EF4444", width=1.8, shape="spline"),
+                    marker=dict(size=4),
                 ),
                 secondary_y=True,
             )
-
-            style_plotly(trend_fig, height=300)
+            style_eng_chart(trend_fig, height=290)
             trend_fig.update_layout(
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                 hovermode="x unified",
             )
-            trend_fig.update_yaxes(title_text="Commercial Flights", secondary_y=False, title_font=dict(size=11, color="#38bdf8"))
-            trend_fig.update_yaxes(title_text="State / Anomaly Count", secondary_y=True, showgrid=False, title_font=dict(size=11, color="#fbbf24"))
+            trend_fig.update_yaxes(title_text="Commercial Flights", secondary_y=False, title_font=dict(size=10, color="#FFB400"))
+            trend_fig.update_yaxes(title_text="State / Anomalies", secondary_y=True, showgrid=False, title_font=dict(size=10, color="#E5E7EB"))
             st.plotly_chart(trend_fig, use_container_width=True)
 
     # =========================================================================
-    # TAB 2: MARKET DOMINANCE, MANUFACTURERS, CARGO & FAMILIES
+    # TAB 2: OPERATORS, CARGO, OEM SHARE & OPERATIONAL FLIGHT ENVELOPE
     # =========================================================================
-    with tab_market:
+    with tab_ops:
         if df.empty:
             st.info("No aircraft data available for the selected filters.")
         else:
-            r1_c1, r1_c2 = st.columns(2, gap="large")
+            r1_c1, r1_c2 = st.columns(2, gap="medium")
 
             with r1_c1:
                 st.markdown(
                     """
-                    <div class="section-head">
-                        <div class="section-title">Top 10 Global Airlines</div>
-                        <div class="section-caption">ACTIVE AIRBORNE FLEET</div>
+                    <div class="sec-bar">
+                        <div class="sec-title">Top 10 Commercial Carriers</div>
+                        <div class="sec-ref">ACTIVE AIRBORNE FLEET</div>
                     </div>
                     """,
                     unsafe_allow_html=True,
@@ -1108,11 +1200,11 @@ if not raw_df.empty:
                         orientation="h",
                         text="Flights",
                         color="Flights",
-                        color_continuous_scale=["#0ea5e9", "#6366f1"],
+                        color_continuous_scale=["#78530A", "#D97706", "#FFB400"],
                     )
                     fig_al.update_traces(textposition="outside", marker_line_width=0)
+                    style_eng_chart(fig_al, height=330)
                     fig_al.update_layout(coloraxis_showscale=False, yaxis=dict(categoryorder="total ascending", title=""), xaxis_title="Active Aircraft")
-                    style_plotly(fig_al, height=330)
                     st.plotly_chart(fig_al, use_container_width=True)
                 else:
                     st.info("Insufficient commercial airline data in current filter.")
@@ -1120,9 +1212,9 @@ if not raw_df.empty:
             with r1_c2:
                 st.markdown(
                     """
-                    <div class="section-head">
-                        <div class="section-title">Manufacturer Market Share</div>
-                        <div class="section-caption">OEM BREAKDOWN</div>
+                    <div class="sec-bar">
+                        <div class="sec-title">OEM Manufacturer Market Share</div>
+                        <div class="sec-ref">GLOBAL FLEET DISTRIBUTION</div>
                     </div>
                     """,
                     unsafe_allow_html=True,
@@ -1136,27 +1228,27 @@ if not raw_df.empty:
                         names="Manufacturer",
                         values="Count",
                         hole=0.62,
-                        color_discrete_sequence=["#38bdf8", "#818cf8", "#2dd4bf", "#fbbf24", "#fb7185", "#a78bfa", "#60a5fa", "#34d399"],
+                        color_discrete_sequence=["#FFB400", "#E5E7EB", "#F97316", "#10B981", "#9CA3AF", "#D97706", "#52525B", "#EF4444"],
                     )
                     fig_oem.update_traces(
                         textposition="inside",
                         textinfo="percent+label",
-                        marker=dict(line=dict(color="#060913", width=2)),
+                        marker=dict(line=dict(color="#111317", width=2)),
                     )
-                    style_plotly(fig_oem, height=330)
+                    style_eng_chart(fig_oem, height=330)
                     fig_oem.update_layout(showlegend=False)
                     st.plotly_chart(fig_oem, use_container_width=True)
                 else:
                     st.info("No manufacturer classification data available.")
 
-            r2_c1, r2_c2 = st.columns(2, gap="large")
+            r2_c1, r2_c2 = st.columns(2, gap="medium")
 
             with r2_c1:
                 st.markdown(
                     """
-                    <div class="section-head">
-                        <div class="section-title">Active Cargo Operators</div>
-                        <div class="section-caption">FREIGHT &amp; LOGISTICS</div>
+                    <div class="sec-bar">
+                        <div class="sec-title">Active Cargo &amp; Freighter Operators</div>
+                        <div class="sec-ref">DEDICATED LOGISTICS</div>
                     </div>
                     """,
                     unsafe_allow_html=True,
@@ -1179,11 +1271,11 @@ if not raw_df.empty:
                         orientation="h",
                         text="Flights",
                         color="Flights",
-                        color_continuous_scale=["#f59e0b", "#fb7185"],
+                        color_continuous_scale=["#7C2D12", "#EA580C", "#FB923C"],
                     )
                     fig_cg.update_traces(textposition="outside", marker_line_width=0)
+                    style_eng_chart(fig_cg, height=330)
                     fig_cg.update_layout(coloraxis_showscale=False, yaxis=dict(categoryorder="total ascending", title=""), xaxis_title="Active Freighters")
-                    style_plotly(fig_cg, height=330)
                     st.plotly_chart(fig_cg, use_container_width=True)
                 else:
                     st.info("No dedicated cargo operators detected in current filter.")
@@ -1191,9 +1283,9 @@ if not raw_df.empty:
             with r2_c2:
                 st.markdown(
                     """
-                    <div class="section-head">
-                        <div class="section-title">Top Deployed Aircraft Families</div>
-                        <div class="section-caption">AIRFRAME UTILIZATION</div>
+                    <div class="sec-bar">
+                        <div class="sec-title">Top 10 Deployed Aircraft Families</div>
+                        <div class="sec-ref">AIRFRAME UTILIZATION</div>
                     </div>
                     """,
                     unsafe_allow_html=True,
@@ -1209,70 +1301,82 @@ if not raw_df.empty:
                         orientation="h",
                         text="Count",
                         color="Count",
-                        color_continuous_scale=["#2dd4bf", "#38bdf8"],
+                        color_continuous_scale=["#065F46", "#059669", "#10B981"],
                     )
                     fig_fm.update_traces(textposition="outside", marker_line_width=0)
+                    style_eng_chart(fig_fm, height=330)
                     fig_fm.update_layout(coloraxis_showscale=False, yaxis=dict(categoryorder="total ascending", title=""), xaxis_title="Active Airframes")
-                    style_plotly(fig_fm, height=330)
                     st.plotly_chart(fig_fm, use_container_width=True)
                 else:
                     st.info("Insufficient airframe family data.")
 
-            # Fleet Body-Type & Generation Split
-            st.markdown(
-                """
-                <div class="section-head" style="margin-top: 0.75rem;">
-                    <div class="section-title">Fleet Architecture &amp; Modernization Split</div>
-                    <div class="section-caption">BODY CLASS &amp; GENERATION</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            b1, b2 = st.columns(2, gap="large")
-            with b1:
-                body_counts = df["Body Type"].value_counts().reset_index()
-                body_counts.columns = ["Body Type", "Count"]
-                fig_body = px.bar(
-                    body_counts,
-                    x="Body Type",
-                    y="Count",
-                    color="Body Type",
-                    text="Count",
-                    color_discrete_sequence=["#38bdf8", "#818cf8", "#2dd4bf", "#fbbf24", "#64748b"],
-                )
-                fig_body.update_traces(textposition="outside", marker_line_width=0)
-                style_plotly(fig_body, height=250)
-                fig_body.update_layout(showlegend=False, xaxis_title="", yaxis_title="Aircraft")
-                st.plotly_chart(fig_body, use_container_width=True)
+            # Additional Informative Aerospace Operations Row: Flight Envelope & Flight Level Bands
+            r3_c1, r3_c2 = st.columns(2, gap="medium")
 
-            with b2:
-                gen_counts = df["Generation"].value_counts().reset_index()
-                gen_counts.columns = ["Generation", "Count"]
-                fig_gen = px.pie(
-                    gen_counts,
-                    names="Generation",
-                    values="Count",
-                    hole=0.65,
-                    color="Generation",
-                    color_discrete_map={"Next-Gen": "#2dd4bf", "Legacy": "#64748b"},
+            with r3_c1:
+                st.markdown(
+                    """
+                    <div class="sec-bar">
+                        <div class="sec-title">Operational Flight Envelope (Speed vs. Altitude)</div>
+                        <div class="sec-ref">ENVELOPE INTEGRITY ANALYSIS</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
                 )
-                fig_gen.update_traces(
-                    textinfo="percent+label",
-                    marker=dict(line=dict(color="#060913", width=2)),
+                env_df = df.sample(n=min(len(df), 2500), random_state=42) if len(df) > 2500 else df
+                fig_env = px.scatter(
+                    env_df,
+                    x="velocity",
+                    y="baro_altitude",
+                    color="Classification",
+                    color_discrete_map={
+                        "CIVILIAN": "rgba(255, 180, 0, 0.50)",
+                        "MILITARY": "#F97316",
+                        "ANOMALY": "#EF4444",
+                    },
+                    hover_name="callsign",
+                    hover_data=["icao24", "aircraft_type", "Threat_Reason"],
+                    labels={"velocity": "Ground Speed (km/h)", "baro_altitude": "Barometric Altitude (ft)"},
                 )
-                style_plotly(fig_gen, height=250)
-                fig_gen.update_layout(showlegend=False)
-                st.plotly_chart(fig_gen, use_container_width=True)
+                style_eng_chart(fig_env, height=310)
+                fig_env.update_layout(legend=dict(orientation="h", y=1.08, x=0, title=None))
+                st.plotly_chart(fig_env, use_container_width=True)
+
+            with r3_c2:
+                st.markdown(
+                    """
+                    <div class="sec-bar">
+                        <div class="sec-title">Vertical Airspace Distribution (Flight Level Bands)</div>
+                        <div class="sec-ref">TRAFFIC STRATIFICATION</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                band_series = df["baro_altitude"].apply(get_altitude_band).value_counts().sort_index()
+                band_df = band_series.reset_index()
+                band_df.columns = ["Altitude Band", "Aircraft"]
+                fig_band = px.bar(
+                    band_df,
+                    x="Altitude Band",
+                    y="Aircraft",
+                    text="Aircraft",
+                    color="Aircraft",
+                    color_continuous_scale=["#3F4654", "#D97706", "#FFB400"],
+                )
+                fig_band.update_traces(textposition="outside", marker_line_width=0)
+                style_eng_chart(fig_band, height=310)
+                fig_band.update_layout(coloraxis_showscale=False, xaxis_title="", yaxis_title="Active Aircraft")
+                st.plotly_chart(fig_band, use_container_width=True)
 
     # =========================================================================
-    # TAB 3: AIRFRAME FAMILY SPOTLIGHT & REGIONAL CONCENTRATION
+    # TAB 3: AIRFRAME MRO TAXONOMY & REGIONAL CONCENTRATION (HHI)
     # =========================================================================
-    with tab_family:
+    with tab_mro:
         st.markdown(
             """
-            <div class="section-head">
-                <div class="section-title">Aircraft Asset Family Deep-Dive</div>
-                <div class="section-caption">GLOBAL FLEET DEPLOYMENT PROFILE</div>
+            <div class="sec-bar">
+                <div class="sec-title">Airframe Family MRO &amp; Fleet Modernization Profile</div>
+                <div class="sec-ref">ACTIVE ASSET FAMILY INSPECTOR</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -1280,41 +1384,38 @@ if not raw_df.empty:
 
         available_families = sorted([f for f in raw_df["Family"].unique() if f != "Other / Unclassified"])
         if available_families:
-            selected_family = st.selectbox("Select Aircraft Asset Family", available_families)
+            selected_family = st.selectbox("SELECT AIRCRAFT ASSET FAMILY", available_families)
             fam_df = raw_df[raw_df["Family"] == selected_family]
             fam_active = len(fam_df)
             fam_share = (fam_active / len(raw_df)) * 100 if len(raw_df) > 0 else 0.0
             fam_ops = fam_df[~fam_df["airline_code"].isin(["UNKN", "", "MIL"])]["airline_code"].nunique()
             top_fam_region = fam_df["sector"].mode()[0] if not fam_df.empty else "N/A"
+            fam_nextgen = (fam_df["Generation"] == "Next-Gen").mean() * 100 if fam_active > 0 else 0.0
 
             top_op_code = fam_df[~fam_df["airline_code"].isin(["UNKN", "", "MIL"])]["airline_code"].mode()[0] if fam_ops > 0 else "UNKN"
             top_op_name = dynamic_airline_map.get(top_op_code, top_op_code)
 
             st.markdown(
                 f"""
-                <div class="spotlight-grid">
-                    <div class="spotlight-box">
-                        <div class="macro-k">Active Assets</div>
-                        <div style="font-family:'Space Grotesk',sans-serif; font-size:1.65rem; font-weight:700; color:#38bdf8;">
-                            {fam_active:,} <span style="font-size:0.9rem; color:#94a3b8; font-weight:500;">({fam_share:.1f}% global)</span>
+                <div class="mro-grid">
+                    <div class="mro-box">
+                        <div class="macro-k">ACTIVE AIRFRAMES</div>
+                        <div style="font-size:1.55rem; font-weight:700; color:#FFB400;">
+                            {fam_active:,} <span style="font-size:0.85rem; color:#8E95A2; font-weight:500;">({fam_share:.1f}% GLOBAL)</span>
                         </div>
                     </div>
-                    <div class="spotlight-box">
-                        <div class="macro-k">Global Operators</div>
-                        <div style="font-family:'Space Grotesk',sans-serif; font-size:1.65rem; font-weight:700; color:#f8fafc;">
-                            {fam_ops} Airlines
-                        </div>
+                    <div class="mro-box">
+                        <div class="macro-k">GLOBAL OPERATORS</div>
+                        <div style="font-size:1.55rem; font-weight:700; color:#FFFFFF;">{fam_ops} AIRLINES</div>
                     </div>
-                    <div class="spotlight-box">
-                        <div class="macro-k">Dominant Region</div>
-                        <div style="font-family:'Space Grotesk',sans-serif; font-size:1.25rem; font-weight:700; color:#fbbf24; margin-top:0.25rem;">
-                            {top_fam_region}
-                        </div>
+                    <div class="mro-box">
+                        <div class="macro-k">DOMINANT OPERATING ZONE</div>
+                        <div style="font-size:1.15rem; font-weight:700; color:#E5E7EB; margin-top:0.25rem;">{top_fam_region}</div>
                     </div>
-                    <div class="spotlight-box">
-                        <div class="macro-k">Primary Operator</div>
-                        <div style="font-family:'Space Grotesk',sans-serif; font-size:1.2rem; font-weight:700; color:#2dd4bf; margin-top:0.25rem;">
-                            {top_op_name} ({top_op_code})
+                    <div class="mro-box">
+                        <div class="macro-k">PRIMARY OPERATOR / NEXT-GEN MIX</div>
+                        <div style="font-size:1.05rem; font-weight:700; color:#10B981; margin-top:0.25rem;">
+                            {top_op_name} ({top_op_code}) &bull; {fam_nextgen:.0f}% NG
                         </div>
                     </div>
                 </div>
@@ -1322,29 +1423,44 @@ if not raw_df.empty:
                 unsafe_allow_html=True,
             )
 
-            fam_sec = fam_df["sector"].value_counts().reset_index()
-            fam_sec.columns = ["Zone", "Flights"]
-            fig_fsec = px.bar(
-                fam_sec,
-                x="Zone",
-                y="Flights",
-                text="Flights",
-                color="Flights",
-                color_continuous_scale=["#6366f1", "#38bdf8"],
-                title=f"{selected_family} — Geographic Footprint",
-            )
-            fig_fsec.update_traces(textposition="outside", marker_line_width=0)
-            style_plotly(fig_fsec, height=280)
-            fig_fsec.update_layout(coloraxis_showscale=False, xaxis_title="", yaxis_title="Active Flights")
-            st.plotly_chart(fig_fsec, use_container_width=True)
-        else:
-            st.info("No classified aircraft families found in current data stream.")
+            mro_c1, mro_c2 = st.columns([1.4, 1.0], gap="medium")
+            with mro_c1:
+                fam_sec = fam_df["sector"].value_counts().reset_index()
+                fam_sec.columns = ["Zone", "Flights"]
+                fig_fsec = px.bar(
+                    fam_sec,
+                    x="Zone",
+                    y="Flights",
+                    text="Flights",
+                    color="Flights",
+                    color_continuous_scale=["#3F4654", "#D97706", "#FFB400"],
+                    title=f"{selected_family.upper()} — GEOGRAPHIC DEPLOYMENT",
+                )
+                fig_fsec.update_traces(textposition="outside", marker_line_width=0)
+                style_eng_chart(fig_fsec, height=285)
+                fig_fsec.update_layout(coloraxis_showscale=False, xaxis_title="", yaxis_title="Airframes")
+                st.plotly_chart(fig_fsec, use_container_width=True)
+
+            with mro_c2:
+                oem_ng = raw_df[raw_df["Manufacturer"] != "Other / Unclassified"].groupby(["Manufacturer", "Generation"]).size().reset_index(name="Count")
+                fig_ng = px.bar(
+                    oem_ng,
+                    x="Manufacturer",
+                    y="Count",
+                    color="Generation",
+                    barmode="stack",
+                    color_discrete_map={"Next-Gen": "#10B981", "Legacy": "#52525B"},
+                    title="OEM FLEET MODERNIZATION (NEXT-GEN VS LEGACY)",
+                )
+                style_eng_chart(fig_ng, height=285)
+                fig_ng.update_layout(xaxis_title="", yaxis_title="Airframes", legend=dict(orientation="h", y=1.08, x=0, title=None))
+                st.plotly_chart(fig_ng, use_container_width=True)
 
         st.markdown(
             """
-            <div class="section-head" style="margin-top: 1rem;">
-                <div class="section-title">Regional Asset Concentration &amp; Market HHI</div>
-                <div class="section-caption">COMPETITIVE DYNAMICS BY ZONE</div>
+            <div class="sec-bar" style="margin-top: 0.75rem;">
+                <div class="sec-title">Regional Asset Concentration &amp; Herfindahl-Hirschman Index (HHI)</div>
+                <div class="sec-ref">SECTOR COMPETITIVE BENCHMARK</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -1361,24 +1477,25 @@ if not raw_df.empty:
                 c_props = carrier_counts / carrier_counts.sum()
                 hhi = sum(c_props ** 2) * 10000
                 if hhi > 2500:
-                    conc_status = "Highly Concentrated"
+                    conc_status = "HIGHLY CONCENTRATED"
                 elif hhi > 1500:
-                    conc_status = "Moderately Concentrated"
+                    conc_status = "MODERATELY CONCENTRATED"
                 else:
-                    conc_status = "Highly Competitive"
-
+                    conc_status = "HIGHLY COMPETITIVE"
                 top_c = carrier_counts.index[0]
                 top_c_str = f"{dynamic_airline_map.get(top_c, top_c)} ({top_c})"
             else:
-                conc_status = "N/A (Charter / State)"
+                conc_status = "N/A (CHARTER / STATE)"
                 top_c_str = "NONE / CHARTER"
 
             top_fam = sector_df["Family"].mode()[0] if not sector_df.empty else "UNKN"
+            ng_share = (sector_df["Generation"] == "Next-Gen").mean() * 100 if sec_tracks > 0 else 0.0
 
             regional_data.append({
                 "Airspace Sector": sector_name,
                 "Active Tracks": sec_tracks,
                 "Deployment Share (%)": round(fleet_share_idx, 1),
+                "Next-Gen Mix (%)": round(ng_share, 1),
                 "Market Concentration": conc_status,
                 "Dominant Carrier": top_c_str,
                 "Dominant Family": top_fam,
@@ -1391,24 +1508,20 @@ if not raw_df.empty:
             hide_index=True,
             column_config={
                 "Active Tracks": st.column_config.NumberColumn("Active Tracks", format="%d"),
-                "Deployment Share (%)": st.column_config.ProgressColumn(
-                    "Deployment Share",
-                    min_value=0.0,
-                    max_value=100.0,
-                    format="%.1f%%",
-                ),
+                "Deployment Share (%)": st.column_config.ProgressColumn("Global Share", min_value=0.0, max_value=100.0, format="%.1f%%"),
+                "Next-Gen Mix (%)": st.column_config.ProgressColumn("Next-Gen %", min_value=0.0, max_value=100.0, format="%.1f%%"),
             },
         )
 
     # =========================================================================
-    # TAB 4: AIRCRAFT INTELLIGENCE LOG
+    # TAB 4: LIVE FLIGHT TELEMETRY LOG
     # =========================================================================
     with tab_log:
         st.markdown(
             f"""
-            <div class="section-head">
-                <div class="section-title">Live Aircraft Intelligence Log</div>
-                <div class="section-caption">SORTED BY PRIORITY &amp; ALTITUDE &bull; {len(df):,} RECORDS</div>
+            <div class="sec-bar">
+                <div class="sec-title">Aircraft Intelligence &amp; Telemetry Registry</div>
+                <div class="sec-ref">PRIORITY SORTED &bull; {len(df):,} ACTIVE RECORDS</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -1417,7 +1530,7 @@ if not raw_df.empty:
         display_cols = [
             "Classification", "icao24", "callsign", "flight_number", "airline_code",
             "aircraft_type", "Family", "Body Type", "Generation", "sector",
-            "baro_altitude", "velocity", "Threat_Reason",
+            "baro_altitude", "velocity", "heading", "Threat_Reason",
         ]
 
         df_full = df[[c for c in display_cols if c in df.columns]].copy()
@@ -1433,14 +1546,15 @@ if not raw_df.empty:
                 "callsign": "Callsign",
                 "flight_number": "Flight No.",
                 "airline_code": "Carrier",
-                "aircraft_type": "Model Code",
+                "aircraft_type": "Model",
                 "Family": "Airframe Family",
-                "Body Type": "Body Type",
+                "Body Type": "Body Class",
                 "Generation": "Gen",
                 "sector": "Region",
                 "baro_altitude": "Alt (ft)",
                 "velocity": "Speed (km/h)",
-                "Threat_Reason": "Flags",
+                "heading": "Hdg (deg)",
+                "Threat_Reason": "Envelope Flags",
             },
             inplace=True,
         )
@@ -1460,14 +1574,15 @@ if not raw_df.empty:
             column_config={
                 "Alt (ft)": st.column_config.NumberColumn("Alt (ft)", format="%,.0f"),
                 "Speed (km/h)": st.column_config.NumberColumn("Speed (km/h)", format="%,.0f"),
+                "Hdg (deg)": st.column_config.NumberColumn("Hdg (deg)", format="%.0f°"),
             },
         )
 
         csv_bytes = df_full.to_csv(index=False).encode("utf-8")
         st.download_button(
-            label="⬇️ Export Filtered Telemetry (CSV)",
+            label="EXPORT FILTERED TELEMETRY (CSV)",
             data=csv_bytes,
-            file_name="aerotrack_live_telemetry.csv",
+            file_name="aerotrack_telemetry_export.csv",
             mime="text/csv",
         )
 
