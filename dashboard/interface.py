@@ -1,8 +1,8 @@
 import sys
 import os
 import re
-import base64
 import html
+import zlib
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -21,13 +21,14 @@ from supabase import create_client
 
 from data_ingestion.client import OpenSkyClient
 
-# -----------------------------------------------------------------------------
-# PAGE CONFIGURATION (UNOBSTRUCTED FULL-CANVAS CORPORATE TERMINAL)
-# -----------------------------------------------------------------------------
+# =============================================================================
+# PAGE CONFIG
+# =============================================================================
 st.set_page_config(
-    page_title="AeroTrack // Institutional Aviation Finance & Fleet Terminal",
+    page_title="AeroTrack | Aviation Finance & Fleet Intelligence",
+    page_icon="✈",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
@@ -40,9 +41,9 @@ except Exception:
     st.error("Unable to initialize AirLabs client. Verify AIRLABS_API_KEY in secrets.")
     st.stop()
 
-# -----------------------------------------------------------------------------
-# INSTITUTIONAL EQUITY, AIRLINE, OEM, AIRFRAME SPEC & MRO UNIVERSES
-# -----------------------------------------------------------------------------
+# =============================================================================
+# REFERENCE DATA
+# =============================================================================
 WATCHLIST_ENTITIES = [
     {"ticker": "AER", "name": "AerCap Holdings N.V.", "category": "Lessors", "iata": None, "exchange": "NYSE", "country": "IE / US"},
     {"ticker": "AL", "name": "Air Lease Corp.", "category": "Lessors", "iata": None, "exchange": "NYSE", "country": "US"},
@@ -141,427 +142,266 @@ MRO_HUBS = [
 CARGO_CODES = {
     "FX", "FDX", "5X", "UPS", "5Y", "GTI", "PO", "PAC", "K4", "CKS", "CV", "CLX", "3S", "BOX",
     "RU", "ABW", "D0", "BCS", "ABR", "GEC", "SQC", "CK", "CKK", "KZ", "NCA", "MP", "MPH", "QT",
-    "TAY", "LD", "AHK"
+    "TAY", "LD", "AHK",
 }
 
-AIRPORT_MAP = {
-    "ATL": "Atlanta", "DFW": "Dallas", "DEN": "Denver", "ORD": "Chicago", "LAX": "Los Angeles",
-    "JFK": "New York", "LHR": "London", "HND": "Tokyo", "CDG": "Paris", "DXB": "Dubai",
-    "DEL": "New Delhi", "BOM": "Mumbai", "FRA": "Frankfurt", "AMS": "Amsterdam", "MAD": "Madrid",
-    "SIN": "Singapore", "HKG": "Hong Kong", "SYD": "Sydney", "YYZ": "Toronto", "IST": "Istanbul"
+CURRENCY_SYMBOLS = {"USD": "$", "EUR": "€", "GBP": "£", "INR": "₹"}
+SECTOR_SCOPES = ["NORTH AMERICA", "EUROPE", "EAST ASIA & APAC", "MIDDLE EAST & S. ASIA", "LATIN AMERICA"]
+
+# Design tokens (kept in Python so charts and CSS stay in sync)
+C = {
+    "bg": "#070A10", "panel": "#0D121B", "panel2": "#121927", "line": "rgba(148,163,184,0.13)",
+    "text": "#E7ECF4", "muted": "#8896AB", "dim": "#5B6A80",
+    "accent": "#5B9DFF", "pos": "#2FBF8F", "neg": "#EF6470", "gold": "#D9A94A", "violet": "#9A8CF2",
 }
+CHART_COLORS = [C["accent"], C["pos"], C["gold"], C["violet"], C["neg"], "#64748B"]
+OEM_COLORS = {"Airbus": C["accent"], "Boeing": C["pos"], "Embraer": C["gold"], "COMAC": C["neg"], "ATR": "#94A3B8"}
 
-_AIRLINER_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
-  <path fill="#ffffff" d="M64 6 C67 6 69 12 69 22 L69 46 L116 74 L116 84 L69 68 L69 98 L88 112 L88 120 L64 113 L40 120 L40 112 L59 98 L59 68 L12 84 L12 74 L59 46 L59 22 C59 12 61 6 64 6 Z"/>
-</svg>"""
-AIRLINER_ICON_URL = "data:image/svg+xml;base64," + base64.b64encode(_AIRLINER_SVG.encode("utf-8")).decode("ascii")
-
-# -----------------------------------------------------------------------------
-# CORPORATE TERMINAL CSS (INTER FONT ONLY + HOVER ZOOM + SMOOTH ANIMATIONS)
-# -----------------------------------------------------------------------------
+# =============================================================================
+# DESIGN SYSTEM (CSS)
+# =============================================================================
 st.markdown(
     """
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
     :root {
-        --bg-canvas: #0B0D12;
-        --bg-surface: #13161E;
-        --bg-elevated: #1A1E29;
-        --bg-hover: #212635;
-        --border-subtle: rgba(255, 255, 255, 0.085);
-        --border-glow: rgba(96, 165, 250, 0.45);
-        --text-primary: #F8FAFC;
-        --text-secondary: #94A3B8;
-        --text-muted: #64748B;
-        --green: #34D399;
-        --green-bg: rgba(52, 211, 153, 0.14);
-        --red: #FB7185;
-        --red-bg: rgba(251, 113, 133, 0.14);
-        --blue: #60A5FA;
-        --blue-bg: rgba(96, 165, 250, 0.14);
-        --amber: #FBBF24;
-        --amber-bg: rgba(251, 191, 36, 0.14);
-        --ease: cubic-bezier(0.22, 1, 0.36, 1);
+        --bg: #070A10; --panel: #0D121B; --panel-2: #121927; --panel-3: #18202F;
+        --line: rgba(148,163,184,0.13); --line-strong: rgba(148,163,184,0.26);
+        --text: #E7ECF4; --muted: #8896AB; --dim: #5B6A80;
+        --accent: #5B9DFF; --accent-soft: rgba(91,157,255,0.13);
+        --pos: #2FBF8F; --pos-soft: rgba(47,191,143,0.13);
+        --neg: #EF6470; --neg-soft: rgba(239,100,112,0.13);
+        --gold: #D9A94A; --gold-soft: rgba(217,169,74,0.13);
+        --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+        --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
     }
 
-    /* Hide Streamlit header/toolbar completely so nothing blocks top canvas */
-    header[data-testid="stHeader"],
-    [data-testid="stToolbar"],
-    [data-testid="stDecoration"],
-    [data-testid="stStatusWidget"],
-    [data-testid="stSidebar"],
-    [data-testid="collapsedControl"],
-    button[kind="header"],
-    #MainMenu,
-    footer {
-        display: none !important;
-        height: 0 !important;
-        visibility: hidden !important;
-    }
+    /* ---------- chrome removal ---------- */
+    header[data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stDecoration"],
+    [data-testid="stStatusWidget"], [data-testid="stSidebarCollapseButton"],
+    [data-testid="collapsedControl"], #MainMenu, footer { display: none !important; }
 
-    @keyframes viewFadeScale {
-        0% { opacity: 0; transform: translateY(14px) scale(0.985); }
-        100% { opacity: 1; transform: translateY(0) scale(1); }
-    }
-    @keyframes staggerZoom {
-        0% { opacity: 0; transform: translateY(10px) scale(0.97); }
-        100% { opacity: 1; transform: translateY(0) scale(1); }
-    }
-    @keyframes drawSpark {
-        0% { stroke-dashoffset: 400; }
-        100% { stroke-dashoffset: 0; }
-    }
-    @keyframes fadeArea {
-        0% { opacity: 0; }
-        100% { opacity: 1; }
-    }
-    @keyframes expandBar {
-        0% { transform: scaleX(0); }
-        100% { transform: scaleX(1); }
-    }
-    @keyframes pulseDot {
-        0% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.65); }
-        70% { box-shadow: 0 0 0 8px rgba(52, 211, 153, 0); }
-        100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); }
-    }
-    @keyframes marquee {
-        0% { transform: translateX(0); }
-        100% { transform: translateX(-50%); }
-    }
-    @keyframes radarScan {
-        0% { transform: translateX(-100%); }
-        100% { transform: translateX(250%); }
-    }
+    /* ---------- motion ---------- */
+    @keyframes fadeUp   { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+    @keyframes fadeIn   { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes draw     { from { stroke-dashoffset: 400; } to { stroke-dashoffset: 0; } }
+    @keyframes growX    { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+    @keyframes pulse    { 0% { box-shadow: 0 0 0 0 rgba(47,191,143,.55); } 70% { box-shadow: 0 0 0 7px rgba(47,191,143,0); } 100% { box-shadow: 0 0 0 0 rgba(47,191,143,0); } }
+    @keyframes marquee  { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+    @keyframes sweep    { from { transform: translateX(-120%); } to { transform: translateX(320%); } }
+    @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 
     html, body, [class*="css"], .stApp {
-        font-family: 'Inter', 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif !important;
-        font-variant-numeric: tabular-nums;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+        -webkit-font-smoothing: antialiased;
     }
-
     .stApp {
         background:
-            radial-gradient(circle at 12% 0%, rgba(37, 99, 235, 0.14), transparent 38%),
-            radial-gradient(circle at 86% 6%, rgba(16, 185, 129, 0.09), transparent 34%),
-            var(--bg-canvas);
-        color: var(--text-primary);
+            radial-gradient(1100px 520px at 8% -8%, rgba(91,157,255,0.09), transparent 60%),
+            radial-gradient(900px 480px at 100% 0%, rgba(47,191,143,0.05), transparent 60%),
+            var(--bg);
+        color: var(--text);
     }
+    .block-container { padding: 1.1rem 2rem 3rem 2rem !important; max-width: 1760px; }
+    .num { font-family: var(--mono); font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
 
-    .block-container {
-        padding: 1rem 1.85rem 2.75rem 1.85rem !important;
-        max-width: 1640px;
+    /* ---------- sidebar rail ---------- */
+    section[data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #0A0F18 0%, #080C13 100%) !important;
+        border-right: 1px solid var(--line);
+        min-width: 318px !important; max-width: 318px !important;
     }
+    section[data-testid="stSidebar"] > div { padding-top: 0.4rem; }
+    section[data-testid="stSidebar"] .block-container { padding: 1rem 1rem 2rem 1rem !important; }
 
-    /* Animated Sparklines */
-    .spark-line { stroke-dasharray: 400; stroke-dashoffset: 400; animation: drawSpark 1.1s var(--ease) forwards; }
-    .spark-area { opacity: 0; animation: fadeArea 0.8s ease 0.25s forwards; }
+    .brand { display: flex; align-items: center; gap: .75rem; padding: .35rem .25rem 1rem .25rem; }
+    .brand-mark {
+        width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center;
+        background: linear-gradient(145deg, #3B82F6, #0EA5A4);
+        box-shadow: 0 8px 22px rgba(59,130,246,.28), inset 0 1px 0 rgba(255,255,255,.25);
+    }
+    .brand-name { font-size: 1.12rem; font-weight: 800; letter-spacing: -0.02em; color: #fff; line-height: 1.05; }
+    .brand-tag { font-size: .66rem; color: var(--muted); font-weight: 500; letter-spacing: .02em; margin-top: 2px; }
 
-    /* Inputs & Selectboxes */
-    div[data-baseweb="input"] > div,
-    .stTextInput > div > div {
-        background-color: var(--bg-elevated) !important;
-        border: 1px solid var(--border-subtle) !important;
-        border-radius: 999px !important;
-        color: var(--text-primary) !important;
-        transition: all 0.25s var(--ease);
+    .rail-label {
+        font-size: .64rem; font-weight: 700; color: var(--dim); letter-spacing: .12em; text-transform: uppercase;
+        padding: .9rem .3rem .45rem .3rem; display: flex; justify-content: space-between; align-items: center;
     }
-    div[data-baseweb="select"] > div {
-        background-color: var(--bg-elevated) !important;
-        border: 1px solid var(--border-subtle) !important;
-        border-radius: 12px !important;
-        color: var(--text-primary) !important;
-        transition: all 0.25s var(--ease);
-    }
-    div[data-baseweb="input"] > div:hover,
-    div[data-baseweb="select"] > div:hover {
-        border-color: rgba(255, 255, 255, 0.22) !important;
-        transform: scale(1.008);
-    }
-    div[data-baseweb="input"] > div:focus-within,
-    div[data-baseweb="select"] > div:focus-within {
-        border-color: var(--blue) !important;
-        box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.18) !important;
-    }
-    div[data-baseweb="select"] span,
-    div[data-baseweb="input"] input {
-        color: var(--text-primary) !important;
-        font-family: 'Inter', sans-serif !important;
-    }
-    ul[data-baseweb="menu"] {
-        background-color: var(--bg-elevated) !important;
-        border: 1px solid var(--border-glow) !important;
-        border-radius: 12px !important;
-    }
-    li[role="option"] { color: var(--text-primary) !important; }
-    li[role="option"]:hover { background-color: var(--bg-hover) !important; }
-    label[data-testid="stWidgetLabel"] p {
-        color: var(--text-secondary) !important;
-        font-size: 0.72rem !important;
-        font-weight: 600 !important;
-        letter-spacing: 0.04em !important;
-        text-transform: uppercase !important;
-    }
+    .rail-label .hint { color: var(--accent); letter-spacing: .06em; }
 
-    /* Pill Radio Controls with Hover Zoom */
-    div[role="radiogroup"] { display: flex; flex-wrap: wrap; gap: 0.48rem; }
-    div[role="radiogroup"] label {
-        background: var(--bg-surface) !important;
-        border: 1px solid var(--border-subtle) !important;
-        border-radius: 999px !important;
-        padding: 0.42rem 1.05rem !important;
-        margin: 0 !important;
-        cursor: pointer !important;
-        transition: transform 0.24s var(--ease), background-color 0.22s ease, border-color 0.22s ease, box-shadow 0.22s ease !important;
+    /* vertical nav (sidebar radio) */
+    section[data-testid="stSidebar"] div[role="radiogroup"] { display: flex; flex-direction: column; gap: 3px; }
+    section[data-testid="stSidebar"] div[role="radiogroup"] label {
+        width: 100%; background: transparent !important; border: 1px solid transparent !important; border-radius: 9px !important;
+        padding: .58rem .8rem !important; margin: 0 !important; cursor: pointer;
+        transition: background .2s var(--ease), border-color .2s var(--ease), transform .2s var(--ease);
     }
-    div[role="radiogroup"] label:hover {
-        background: var(--bg-hover) !important;
-        border-color: rgba(255, 255, 255, 0.25) !important;
-        transform: translateY(-2px) scale(1.035);
-        box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+    section[data-testid="stSidebar"] div[role="radiogroup"] label:hover { background: var(--panel-2) !important; transform: translateX(2px); }
+    section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) {
+        background: linear-gradient(90deg, rgba(91,157,255,.16), rgba(91,157,255,.03)) !important;
+        border-color: rgba(91,157,255,.30) !important; box-shadow: inset 3px 0 0 var(--accent);
     }
-    div[role="radiogroup"] label[data-checked="true"],
-    div[role="radiogroup"] label:has(input:checked) {
-        background: linear-gradient(135deg, rgba(96, 165, 250, 0.25), rgba(52, 211, 153, 0.18)) !important;
-        border-color: var(--blue) !important;
-        box-shadow: 0 6px 18px rgba(96, 165, 250, 0.2) !important;
-    }
-    div[role="radiogroup"] label > div:first-child { display: none !important; }
-    div[role="radiogroup"] label p {
-        color: var(--text-primary) !important;
-        font-size: 0.81rem !important;
-        font-weight: 600 !important;
-        font-family: 'Inter', sans-serif !important;
-    }
+    section[data-testid="stSidebar"] div[role="radiogroup"] label > div:first-child { display: none !important; }
+    section[data-testid="stSidebar"] div[role="radiogroup"] label p { font-size: .84rem !important; font-weight: 600 !important; color: #C9D3E2 !important; }
+    section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) p { color: #fff !important; }
 
-    /* Corporate Tabs with Hover Lift */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 0.45rem;
-        background: var(--bg-surface);
-        padding: 0.35rem;
-        border: 1px solid var(--border-subtle);
-        border-radius: 14px;
-        margin: 0.8rem 0 1rem 0;
-    }
-    .stTabs [data-baseweb="tab"] {
-        font-family: 'Inter', sans-serif;
-        font-size: 0.83rem;
-        font-weight: 600;
-        color: var(--text-secondary);
-        border-radius: 10px;
-        padding: 0.5rem 1.05rem;
-        transition: all 0.22s var(--ease);
-    }
-    .stTabs [data-baseweb="tab"]:hover {
-        color: #FFFFFF;
-        background: var(--bg-hover);
-        transform: scale(1.025);
-    }
-    .stTabs [aria-selected="true"] {
-        background: linear-gradient(135deg, #2563EB, #0F766E) !important;
-        color: #FFFFFF !important;
-        box-shadow: 0 4px 14px rgba(37, 99, 235, 0.3);
-    }
-    .stTabs [data-baseweb="tab-highlight"] { display: none !important; }
+    /* watchlist filter (horizontal segmented) is rendered through .seg-scope wrapper */
+    .seg-scope div[role="radiogroup"] { flex-direction: row !important; gap: 4px !important; background: var(--panel); padding: 3px; border: 1px solid var(--line); border-radius: 10px; }
+    .seg-scope div[role="radiogroup"] label { flex: 1; justify-content: center; text-align: center; padding: .34rem .2rem !important; }
+    .seg-scope div[role="radiogroup"] label:hover { transform: none !important; }
+    .seg-scope div[role="radiogroup"] label p { font-size: .72rem !important; text-align: center; width: 100%; }
 
-    /* Global Button Styling + Watchlist Card Buttons (Hover Enlargement) */
-    div.stButton > button,
-    div.stDownloadButton > button {
-        background: var(--bg-surface);
-        color: var(--text-primary);
-        border: 1px solid var(--border-subtle);
-        border-radius: 12px;
-        font-family: 'Inter', sans-serif;
-        font-size: 0.8rem;
-        font-weight: 600;
-        line-height: 1.38;
-        transition: transform 0.25s var(--ease), background-color 0.22s ease, border-color 0.22s ease, box-shadow 0.25s ease;
+    /* watchlist rows */
+    .wl div.stButton > button {
+        width: 100%; text-align: left !important; justify-content: flex-start !important; white-space: pre-line !important;
+        padding: .55rem .75rem !important; margin-bottom: -.4rem; background: var(--panel) !important;
+        border: 1px solid var(--line) !important; border-radius: 10px !important; color: var(--text) !important;
+        font-size: .76rem !important; line-height: 1.45 !important; font-weight: 500 !important;
+        transition: border-color .2s var(--ease), background .2s var(--ease), transform .2s var(--ease), box-shadow .2s var(--ease);
     }
-    div.stButton > button:hover,
-    div.stDownloadButton > button:hover {
-        background: var(--bg-hover);
-        border-color: var(--blue);
-        color: #FFFFFF;
-        transform: translateY(-2px) scale(1.028);
-        box-shadow: 0 12px 26px rgba(0, 0, 0, 0.45);
-        z-index: 10;
+    .wl div.stButton > button:hover {
+        background: var(--panel-2) !important; border-color: rgba(91,157,255,.5) !important;
+        transform: translateX(3px); box-shadow: inset 3px 0 0 var(--accent), 0 8px 18px rgba(0,0,0,.35);
     }
+    .wl div.stButton > button p { font-family: var(--mono); font-size: .74rem; }
 
-    /* Watchlist Rail specific sleek row buttons */
-    .wl-wrap div.stButton > button {
-        width: 100%;
-        text-align: left !important;
-        justify-content: flex-start !important;
-        padding: 0.58rem 0.78rem !important;
-        white-space: pre-line !important;
-        background: rgba(26, 30, 41, 0.72) !important;
-        border: 1px solid var(--border-subtle) !important;
-        border-radius: 12px !important;
-        margin-bottom: -0.35rem !important;
+    /* ---------- generic controls ---------- */
+    div[data-baseweb="input"] > div {
+        background: var(--panel) !important; border: 1px solid var(--line) !important; border-radius: 10px !important;
+        transition: border-color .2s var(--ease), box-shadow .2s var(--ease);
     }
-    .wl-wrap div.stButton > button:hover {
-        background: #23293A !important;
-        border-color: var(--blue) !important;
-        transform: translateX(4px) scale(1.032) !important;
-        box-shadow: 0 10px 24px rgba(0, 0, 0, 0.5), inset 3px 0 0 var(--blue) !important;
-    }
+    div[data-baseweb="input"] > div:focus-within { border-color: var(--accent) !important; box-shadow: 0 0 0 3px rgba(91,157,255,.16) !important; }
+    div[data-baseweb="input"] input { color: var(--text) !important; font-size: .86rem !important; }
+    div[data-baseweb="select"] > div { background: var(--panel) !important; border: 1px solid var(--line) !important; border-radius: 10px !important; }
+    ul[data-baseweb="menu"] { background: var(--panel-2) !important; border: 1px solid var(--line-strong) !important; border-radius: 10px !important; }
+    li[role="option"]:hover { background: var(--panel-3) !important; }
+    label[data-testid="stWidgetLabel"] p { color: var(--muted) !important; font-size: .68rem !important; font-weight: 700 !important; letter-spacing: .08em !important; text-transform: uppercase !important; }
 
-    /* Animated Chart & Table Frames with Hover Zoom */
-    div[data-testid="stPlotlyChart"],
-    div[data-testid="stDataFrame"] {
-        background: var(--bg-surface);
-        border: 1px solid var(--border-subtle);
-        border-radius: 16px;
-        padding: 0.45rem;
-        transition: transform 0.28s var(--ease), border-color 0.25s ease, box-shadow 0.28s ease;
-        animation: viewFadeScale 0.48s var(--ease) both;
+    /* main-area chip radios */
+    .main div[role="radiogroup"], section.main div[role="radiogroup"], div[data-testid="stMain"] div[role="radiogroup"] { display: flex; flex-wrap: wrap; gap: .4rem; }
+    div[data-testid="stMain"] div[role="radiogroup"] label {
+        background: var(--panel) !important; border: 1px solid var(--line) !important; border-radius: 8px !important;
+        padding: .36rem .85rem !important; margin: 0 !important; cursor: pointer;
+        transition: background .2s var(--ease), border-color .2s var(--ease), transform .2s var(--ease);
     }
-    div[data-testid="stPlotlyChart"]:hover,
-    div[data-testid="stDataFrame"]:hover {
-        transform: scale(1.012);
-        border-color: rgba(96, 165, 250, 0.38);
-        box-shadow: 0 16px 34px rgba(0, 0, 0, 0.45);
-    }
+    div[data-testid="stMain"] div[role="radiogroup"] label:hover { background: var(--panel-2) !important; border-color: var(--line-strong) !important; transform: translateY(-1px); }
+    div[data-testid="stMain"] div[role="radiogroup"] label:has(input:checked) { background: var(--accent-soft) !important; border-color: rgba(91,157,255,.55) !important; }
+    div[data-testid="stMain"] div[role="radiogroup"] label > div:first-child { display: none !important; }
+    div[data-testid="stMain"] div[role="radiogroup"] label p { font-size: .76rem !important; font-weight: 600 !important; color: #C9D3E2 !important; }
+    div[data-testid="stMain"] div[role="radiogroup"] label:has(input:checked) p { color: #fff !important; }
 
-    /* Brand & Header */
-    .brand-wrap { display: flex; align-items: center; gap: 0.85rem; }
-    .brand-icon {
-        width: 42px; height: 42px; border-radius: 12px;
-        background: linear-gradient(135deg, #2563EB, #059669);
-        display: flex; align-items: center; justify-content: center;
-        box-shadow: 0 6px 20px rgba(37, 99, 235, 0.35);
-        transition: transform 0.3s var(--ease);
+    /* buttons */
+    div[data-testid="stMain"] div.stButton > button, div.stDownloadButton > button {
+        background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 9px;
+        font-size: .78rem; font-weight: 600; padding: .45rem .9rem;
+        transition: border-color .2s var(--ease), background .2s var(--ease), transform .2s var(--ease), box-shadow .2s var(--ease);
     }
-    .brand-icon:hover { transform: scale(1.08) rotate(-6deg); }
-    .brand-name { font-size: 1.35rem; font-weight: 800; letter-spacing: -0.025em; color: #FFFFFF; line-height: 1.1; }
-    .brand-sub { font-size: 0.74rem; color: var(--text-secondary); font-weight: 500; }
-    .live-pill {
-        display: inline-flex; align-items: center; justify-content: center; gap: 0.48rem;
-        background: var(--green-bg); border: 1px solid rgba(52, 211, 153, 0.35);
-        color: var(--green); border-radius: 999px; padding: 0.42rem 0.9rem;
-        font-size: 0.74rem; font-weight: 600;
-    }
-    .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); animation: pulseDot 2s infinite; }
+    div[data-testid="stMain"] div.stButton > button:hover { border-color: var(--accent); background: var(--panel-3); transform: translateY(-1px); box-shadow: 0 8px 18px rgba(0,0,0,.35); color: #fff; }
 
-    /* Live Ticker Marquee */
-    .ticker-shell {
-        overflow: hidden; background: rgba(26, 30, 41, 0.75);
-        backdrop-filter: blur(10px); border: 1px solid var(--border-subtle);
-        border-radius: 999px; padding: 0.4rem 0; margin: 0.6rem 0 0.9rem 0; white-space: nowrap;
-    }
-    .ticker-track { display: inline-flex; gap: 2.1rem; animation: marquee 38s linear infinite; will-change: transform; }
-    .ticker-shell:hover .ticker-track { animation-play-state: paused; }
-    .tick-item { display: inline-flex; align-items: center; gap: 0.42rem; font-size: 0.76rem; color: var(--text-primary); }
+    /* tabs: underline style */
+    .stTabs [data-baseweb="tab-list"] { gap: 1.6rem; border-bottom: 1px solid var(--line); background: transparent; padding: 0; margin: .4rem 0 1rem 0; }
+    .stTabs [data-baseweb="tab"] { background: transparent; padding: .7rem 0 !important; font-size: .84rem; font-weight: 600; color: var(--muted); height: auto; transition: color .2s var(--ease); }
+    .stTabs [data-baseweb="tab"]:hover { color: #fff; }
+    .stTabs [aria-selected="true"] { color: #fff !important; }
+    .stTabs [data-baseweb="tab-highlight"] { background: var(--accent) !important; height: 2px !important; }
+    .stTabs [data-baseweb="tab-border"] { display: none; }
 
-    /* Index & KPI Cards with Hover Enlargement */
-    .idx-card {
-        position: relative; overflow: hidden;
-        background: var(--bg-surface); border: 1px solid var(--border-subtle);
-        border-radius: 16px; padding: 1.05rem 1.15rem 0.75rem 1.15rem;
-        transition: transform 0.28s var(--ease), border-color 0.25s ease, box-shadow 0.28s ease;
-        animation: staggerZoom 0.48s var(--ease) both;
-        will-change: transform;
+    /* bordered containers = panels */
+    div[data-testid="stVerticalBlockBorderWrapper"] {
+        background: var(--panel); border: 1px solid var(--line) !important; border-radius: 14px !important;
+        animation: fadeUp .5s var(--ease) both; transition: border-color .25s var(--ease);
     }
-    .idx-card:hover {
-        transform: translateY(-4px) scale(1.032);
-        border-color: var(--border-glow);
-        box-shadow: 0 18px 38px rgba(0, 0, 0, 0.52);
-        z-index: 12;
-    }
-    .idx-kicker { font-size: 0.72rem; font-weight: 700; color: var(--text-secondary); letter-spacing: 0.04em; text-transform: uppercase; }
-    .idx-big { font-size: 1.55rem; font-weight: 800; color: #FFFFFF; margin: 0.22rem 0; letter-spacing: -0.02em; }
-    .pill-up { background: var(--green-bg); color: var(--green); padding: 0.14rem 0.5rem; border-radius: 999px; font-size: 0.72rem; font-weight: 700; }
-    .pill-dn { background: var(--red-bg); color: var(--red); padding: 0.14rem 0.5rem; border-radius: 999px; font-size: 0.72rem; font-weight: 700; }
+    div[data-testid="stVerticalBlockBorderWrapper"]:hover { border-color: var(--line-strong) !important; }
+    div[data-testid="stDataFrame"] { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; animation: fadeIn .5s var(--ease) both; }
 
-    /* Glass Panels, Equity Tear-Sheet & Airframe Blueprint Showcase */
-    .glass-card {
-        background: var(--bg-surface); border: 1px solid var(--border-subtle);
-        border-radius: 18px; padding: 1.25rem 1.4rem; margin-bottom: 1.05rem;
-        transition: transform 0.28s var(--ease), border-color 0.25s ease, box-shadow 0.28s ease;
-        animation: viewFadeScale 0.46s var(--ease) both;
+    /* ---------- command bar / page header ---------- */
+    .status-pill {
+        display: flex; align-items: center; justify-content: center; gap: .5rem; height: 38px;
+        background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+        font-size: .72rem; font-weight: 600; color: #C9D3E2; white-space: nowrap;
     }
-    .glass-card:hover {
-        transform: scale(1.008);
-        border-color: rgba(96, 165, 250, 0.35);
-        box-shadow: 0 16px 36px rgba(0, 0, 0, 0.44);
-    }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--pos); animation: pulse 2s infinite; }
+    .page-head { display: flex; justify-content: space-between; align-items: flex-end; margin: .9rem 0 1rem 0; animation: fadeUp .45s var(--ease) both; }
+    .page-title { font-size: 1.55rem; font-weight: 800; letter-spacing: -0.03em; color: #fff; line-height: 1.1; }
+    .page-sub { font-size: .8rem; color: var(--muted); margin-top: .3rem; }
+    .crumb { font-size: .66rem; font-weight: 700; color: var(--accent); letter-spacing: .12em; text-transform: uppercase; margin-bottom: .35rem; }
 
-    .stat-mini {
-        background: var(--bg-elevated); border: 1px solid var(--border-subtle);
-        border-radius: 13px; padding: 0.78rem 0.92rem;
-        transition: transform 0.24s var(--ease), border-color 0.22s ease, box-shadow 0.24s ease;
-    }
-    .stat-mini:hover {
-        transform: translateY(-3px) scale(1.03);
-        border-color: var(--blue);
-        box-shadow: 0 12px 24px rgba(0, 0, 0, 0.4);
-    }
-    .stat-k { font-size: 0.69rem; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.04em; }
-    .stat-v { font-size: 1.1rem; font-weight: 800; color: #FFFFFF; margin-top: 0.18rem; }
+    /* ticker */
+    .ticker { overflow: hidden; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: rgba(13,18,27,.7); white-space: nowrap; padding: .42rem 0; margin: .7rem 0 0 0; }
+    .ticker-track { display: inline-flex; gap: 2.4rem; animation: marquee 55s linear infinite; will-change: transform; }
+    .ticker:hover .ticker-track { animation-play-state: paused; }
+    .tick { display: inline-flex; gap: .5rem; align-items: baseline; font-size: .72rem; color: #C9D3E2; }
+    .tick b { color: #fff; font-weight: 700; }
+    .tick .px { font-family: var(--mono); color: #fff; }
 
-    /* Airframe Technical Render Stage */
-    .render-stage {
-        position: relative; overflow: hidden;
-        background: radial-gradient(circle at 50% 45%, rgba(37, 99, 235, 0.16), rgba(15, 23, 42, 0.85));
-        border: 1px solid rgba(96, 165, 250, 0.28);
-        border-radius: 18px; padding: 1.25rem;
-        transition: transform 0.3s var(--ease), box-shadow 0.3s ease;
-        animation: viewFadeScale 0.5s var(--ease) both;
+    /* ---------- KPI cards ---------- */
+    .kpi {
+        position: relative; overflow: hidden; background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+        padding: 1rem 1.1rem .8rem 1.1rem; animation: fadeUp .5s var(--ease) both;
+        transition: transform .25s var(--ease), border-color .25s var(--ease), box-shadow .25s var(--ease);
     }
-    .render-stage:hover {
-        transform: scale(1.018);
-        box-shadow: 0 18px 40px rgba(37, 99, 235, 0.18);
-    }
-    .render-stage::after {
-        content: ""; position: absolute; top: 0; left: 0; width: 35%; height: 100%;
-        background: linear-gradient(90deg, transparent, rgba(96, 165, 250, 0.09), transparent);
-        animation: radarScan 4.5s ease-in-out infinite;
-        pointer-events: none;
-    }
+    .kpi::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--kc, var(--accent)); opacity: .9; }
+    .kpi:hover { transform: translateY(-3px); border-color: var(--line-strong); box-shadow: 0 16px 34px rgba(0,0,0,.42); }
+    .kpi-k { font-size: .66rem; font-weight: 700; color: var(--muted); letter-spacing: .1em; text-transform: uppercase; }
+    .kpi-v { font-family: var(--mono); font-size: 1.85rem; font-weight: 600; color: #fff; letter-spacing: -0.04em; margin: .3rem 0 .25rem 0; }
+    .kpi-s { font-size: .72rem; color: var(--muted); }
+    .chg { display: inline-flex; align-items: center; gap: .25rem; font-family: var(--mono); font-size: .72rem; font-weight: 600; padding: .12rem .45rem; border-radius: 6px; }
+    .chg.up { color: var(--pos); background: var(--pos-soft); }
+    .chg.dn { color: var(--neg); background: var(--neg-soft); }
+    .spark-line { stroke-dasharray: 400; stroke-dashoffset: 400; animation: draw 1.2s var(--ease) .1s forwards; }
+    .spark-area { opacity: 0; animation: fadeIn .9s ease .35s forwards; }
 
-    /* Animated MRO Check Bars */
-    .mro-bar-wrap {
-        background: var(--bg-surface); border: 1px solid var(--border-subtle);
-        border-radius: 14px; padding: 0.92rem 1.05rem;
-        transition: transform 0.24s var(--ease), border-color 0.22s ease;
-    }
-    .mro-bar-wrap:hover { transform: translateY(-3px) scale(1.028); border-color: var(--border-glow); }
-    .mro-track { width: 100%; height: 8px; background: #262B38; border-radius: 999px; overflow: hidden; margin-top: 0.45rem; }
-    .mro-fill { height: 100%; border-radius: 999px; transform-origin: left; animation: expandBar 0.95s var(--ease) forwards; }
+    /* ---------- metric tiles ---------- */
+    .tile { background: var(--panel-2); border: 1px solid var(--line); border-radius: 11px; padding: .75rem .9rem; height: 100%; animation: fadeUp .5s var(--ease) both; transition: border-color .2s var(--ease), transform .2s var(--ease); }
+    .tile:hover { border-color: rgba(91,157,255,.45); transform: translateY(-2px); }
+    .tile-k { font-size: .62rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .1em; }
+    .tile-v { font-family: var(--mono); font-size: .98rem; font-weight: 600; color: #fff; margin-top: .25rem; letter-spacing: -0.02em; }
 
-    /* News Cards with Hover Zoom */
-    .news-tile {
-        background: var(--bg-surface); border: 1px solid var(--border-subtle);
-        border-radius: 16px; padding: 1.1rem 1.2rem; margin-bottom: 0.9rem;
-        transition: transform 0.26s var(--ease), border-color 0.24s ease, background-color 0.24s ease, box-shadow 0.26s ease;
-        animation: staggerZoom 0.45s var(--ease) both;
-    }
-    .news-tile:hover {
-        transform: translateY(-4px) scale(1.022);
-        background: var(--bg-elevated);
-        border-color: var(--border-glow);
-        box-shadow: 0 16px 34px rgba(0, 0, 0, 0.45);
-    }
-    .news-tile a { color: #F8FAFC; text-decoration: none; font-size: 0.96rem; font-weight: 700; line-height: 1.4; display: block; margin: 0.42rem 0; }
-    .news-tile a:hover { color: var(--blue); }
-    .news-snip { font-size: 0.81rem; color: var(--text-secondary); line-height: 1.5; }
+    /* section header */
+    .sec { display: flex; justify-content: space-between; align-items: baseline; margin: 1.35rem 0 .7rem 0; }
+    .sec-t { font-size: .98rem; font-weight: 700; color: #fff; letter-spacing: -0.01em; }
+    .sec-s { font-size: .66rem; font-weight: 700; color: var(--dim); letter-spacing: .1em; text-transform: uppercase; }
 
-    .sec-head { display: flex; justify-content: space-between; align-items: center; margin: 1rem 0 0.7rem 0; padding-bottom: 0.45rem; border-bottom: 1px solid var(--border-subtle); }
-    .sec-title { font-size: 1.02rem; font-weight: 700; color: #FFFFFF; }
-    .sec-sub { font-size: 0.74rem; color: var(--text-secondary); font-weight: 600; }
+    /* hero card */
+    .hero { background: linear-gradient(135deg, var(--panel-2), var(--panel)); border: 1px solid var(--line); border-radius: 16px; padding: 1.3rem 1.5rem; margin-bottom: 1rem; animation: fadeUp .5s var(--ease) both; }
+    .badge { display: inline-block; font-size: .68rem; font-weight: 700; padding: .18rem .6rem; border-radius: 6px; letter-spacing: .04em; background: var(--accent-soft); color: var(--accent); border: 1px solid rgba(91,157,255,.28); }
+    .badge.gold { background: var(--gold-soft); color: var(--gold); border-color: rgba(217,169,74,.3); }
+    .badge.pos { background: var(--pos-soft); color: var(--pos); border-color: rgba(47,191,143,.3); }
 
-    ::-webkit-scrollbar { width: 6px; height: 6px; }
-    ::-webkit-scrollbar-track { background: var(--bg-canvas); }
-    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 999px; }
-    ::-webkit-scrollbar-thumb:hover { background: var(--blue); }
+    /* schematic */
+    .stage { position: relative; overflow: hidden; border: 1px solid rgba(91,157,255,.25); border-radius: 16px; padding: 1rem 1.1rem;
+        background: radial-gradient(circle at 50% 40%, rgba(91,157,255,.12), rgba(8,12,19,.95)); animation: fadeUp .5s var(--ease) both; }
+    .stage::after { content: ""; position: absolute; inset: 0 auto 0 0; width: 28%; background: linear-gradient(90deg, transparent, rgba(91,157,255,.08), transparent); animation: sweep 5.5s ease-in-out infinite; pointer-events: none; }
+
+    /* progress */
+    .bar { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: .9rem 1rem; transition: border-color .2s var(--ease), transform .2s var(--ease); animation: fadeUp .5s var(--ease) both; }
+    .bar:hover { border-color: var(--line-strong); transform: translateY(-2px); }
+    .bar-row { display: flex; justify-content: space-between; font-size: .76rem; font-weight: 600; color: #C9D3E2; }
+    .bar-track { height: 6px; background: #1C2433; border-radius: 99px; overflow: hidden; margin-top: .55rem; }
+    .bar-fill { height: 100%; border-radius: 99px; transform-origin: left; animation: growX 1s var(--ease) both; }
+
+    /* news */
+    .news { background: var(--panel); border: 1px solid var(--line); border-radius: 13px; padding: 1rem 1.15rem; margin-bottom: .85rem; animation: fadeUp .5s var(--ease) both; transition: transform .25s var(--ease), border-color .25s var(--ease), background .25s var(--ease); }
+    .news:hover { transform: translateY(-3px); background: var(--panel-2); border-color: rgba(91,157,255,.4); }
+    .news a { display: block; color: #F1F5F9; text-decoration: none; font-weight: 650; font-size: .93rem; line-height: 1.4; margin: .45rem 0; }
+    .news a:hover { color: var(--accent); }
+    .news-meta { display: flex; justify-content: space-between; font-size: .66rem; letter-spacing: .08em; font-weight: 700; text-transform: uppercase; }
+    .news-snip { font-size: .8rem; color: var(--muted); line-height: 1.55; }
+
+    ::-webkit-scrollbar { width: 7px; height: 7px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #263043; border-radius: 99px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--accent); }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
 
-# -----------------------------------------------------------------------------
-# HELPERS, RETINA AIRFRAME SVG RENDERS & DATA LOADERS
-# -----------------------------------------------------------------------------
+# =============================================================================
+# HELPERS
+# =============================================================================
 def safe_float(value, default=0.0):
     try:
         return float(value)
@@ -646,88 +486,58 @@ def classify_airframe_taxonomy(icao_code):
     return pd.Series([manufacturer, family, body_type, generation])
 
 
-def build_svg_sparkline(values, color="#34D399", width=190, height=36, uid="sp"):
+def build_svg_sparkline(values, color, width=230, height=40, uid="sp"):
     clean = [float(v) for v in values if v is not None and not np.isnan(v)]
     if len(clean) < 2:
         clean = [1.0, 1.0]
     lo, hi = min(clean), max(clean)
     span = (hi - lo) if hi > lo else 1.0
-    pts = []
     n = len(clean)
-    for i, val in enumerate(clean):
-        x = (i / (n - 1)) * width
-        y = height - 3 - ((val - lo) / span) * (height - 6)
-        pts.append(f"{x:.1f},{y:.1f}")
-    poly_pts = " ".join(pts)
-    area_pts = f"0,{height} {poly_pts} {width},{height}"
+    pts = [f"{(i / (n - 1)) * width:.1f},{height - 4 - ((v - lo) / span) * (height - 8):.1f}" for i, v in enumerate(clean)]
+    poly = " ".join(pts)
+    area = f"0,{height} {poly} {width},{height}"
     return (
-        f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" xmlns="http://www.w3.org/2000/svg">'
+        f'<svg width="100%" height="{height}" viewBox="0 0 {width} {height}" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">'
         f'<defs><linearGradient id="g_{uid}" x1="0" y1="0" x2="0" y2="1">'
-        f'<stop offset="0%" stop-color="{color}" stop-opacity="0.34"/>'
-        f'<stop offset="100%" stop-color="{color}" stop-opacity="0.0"/>'
+        f'<stop offset="0%" stop-color="{color}" stop-opacity="0.30"/><stop offset="100%" stop-color="{color}" stop-opacity="0"/>'
         f'</linearGradient></defs>'
-        f'<polygon class="spark-area" points="{area_pts}" fill="url(#g_{uid})"/>'
-        f'<polyline class="spark-line" points="{poly_pts}" fill="none" stroke="{color}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>'
-        f'</svg>'
+        f'<polygon class="spark-area" points="{area}" fill="url(#g_{uid})"/>'
+        f'<polyline class="spark-line" points="{poly}" fill="none" stroke="{color}" stroke-width="2" '
+        f'stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/></svg>'
     )
 
 
 def build_airframe_blueprint_svg(body_type, is_cargo, ac_code):
-    """High-resolution vector airframe side + planform technical render for Digital Twin inspection."""
-    accent = "#FBBF24" if is_cargo else ("#60A5FA" if body_type == "Widebody" else ("#34D399" if body_type == "Narrowbody" else "#A78BFA"))
-    cabin_windows = "".join(
-        f'<rect x="{125 + i*11}" y="99" width="5" height="4" rx="1" fill="#0B0D12" opacity="0.85"/>'
-        for i in range(22 if body_type == "Widebody" else (16 if body_type == "Narrowbody" else 11))
-    )
+    accent = C["gold"] if is_cargo else (C["accent"] if body_type == "Widebody" else (C["pos"] if body_type == "Narrowbody" else C["violet"]))
+    n_win = 22 if body_type == "Widebody" else (16 if body_type == "Narrowbody" else 11)
+    windows = "".join(f'<rect x="{125 + i * 11}" y="99" width="5" height="4" rx="1" fill="#070A10" opacity="0.85"/>' for i in range(n_win))
     if is_cargo:
-        cabin_windows = '<rect x="145" y="96" width="58" height="10" rx="2" fill="#FBBF24" opacity="0.28" stroke="#FBBF24" stroke-width="0.9"/>'
-
-    nose_label = "CARGO MAIN DECK" if is_cargo else f"{body_type.upper()} PROFILE"
+        windows = f'<rect x="145" y="96" width="58" height="10" rx="2" fill="{accent}" opacity="0.28" stroke="{accent}" stroke-width="0.9"/>'
+    label = "CARGO MAIN DECK" if is_cargo else f"{body_type.upper()} PROFILE"
     return (
         f'<svg viewBox="0 0 520 215" width="100%" xmlns="http://www.w3.org/2000/svg">'
         f'<defs>'
-        f'  <linearGradient id="fuselageGrad" x1="0" y1="0" x2="0" y2="1">'
-        f'    <stop offset="0%" stop-color="#E2E8F0"/>'
-        f'    <stop offset="55%" stop-color="#94A3B8"/>'
-        f'    <stop offset="100%" stop-color="#475569"/>'
-        f'  </linearGradient>'
-        f'  <linearGradient id="wingGrad" x1="0" y1="0" x2="1" y2="1">'
-        f'    <stop offset="0%" stop-color="{accent}" stop-opacity="0.75"/>'
-        f'    <stop offset="100%" stop-color="#1E293B" stop-opacity="0.9"/>'
-        f'  </linearGradient>'
-        f'  <pattern id="bpGrid" width="24" height="24" patternUnits="userSpaceOnUse">'
-        f'    <path d="M 24 0 L 0 0 0 24" fill="none" stroke="rgba(96,165,250,0.12)" stroke-width="0.8"/>'
-        f'  </pattern>'
+        f'<linearGradient id="fus" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#E2E8F0"/><stop offset="55%" stop-color="#94A3B8"/><stop offset="100%" stop-color="#475569"/></linearGradient>'
+        f'<linearGradient id="wng" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="{accent}" stop-opacity="0.75"/><stop offset="100%" stop-color="#1E293B" stop-opacity="0.9"/></linearGradient>'
+        f'<pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M 24 0 L 0 0 0 24" fill="none" stroke="rgba(91,157,255,0.10)" stroke-width="0.8"/></pattern>'
         f'</defs>'
-        f'<rect width="520" height="215" rx="12" fill="url(#bpGrid)"/>'
-        # Technical callout lines
-        f'<line x1="25" y1="158" x2="495" y2="158" stroke="rgba(148,163,184,0.28)" stroke-dasharray="4 4"/>'
-        f'<line x1="265" y1="30" x2="265" y2="178" stroke="{accent}" stroke-opacity="0.35" stroke-dasharray="3 3"/>'
-        # Vertical stabilizer
-        f'<path d="M 392 92 L 456 26 L 478 26 L 444 96 Z" fill="url(#wingGrad)" stroke="{accent}" stroke-width="1.2"/>'
-        # Horizontal stabilizer
+        f'<rect width="520" height="215" rx="10" fill="url(#grid)"/>'
+        f'<line x1="25" y1="158" x2="495" y2="158" stroke="rgba(148,163,184,0.25)" stroke-dasharray="4 4"/>'
+        f'<line x1="265" y1="30" x2="265" y2="178" stroke="{accent}" stroke-opacity="0.3" stroke-dasharray="3 3"/>'
+        f'<path d="M 392 92 L 456 26 L 478 26 L 444 96 Z" fill="url(#wng)" stroke="{accent}" stroke-width="1.2"/>'
         f'<path d="M 426 111 L 474 103 L 480 110 L 434 118 Z" fill="#64748B" stroke="#CBD5E1" stroke-width="0.8"/>'
-        # Main fuselage
-        f'<path d="M 52 114 C 54 96, 82 88, 120 88 L 400 90 C 425 91, 452 98, 466 107 C 452 118, 424 123, 398 124 L 118 124 C 76 124, 52 121, 52 114 Z" fill="url(#fuselageGrad)" stroke="#E2E8F0" stroke-width="1.1"/>'
-        # Cockpit windshield
+        f'<path d="M 52 114 C 54 96, 82 88, 120 88 L 400 90 C 425 91, 452 98, 466 107 C 452 118, 424 123, 398 124 L 118 124 C 76 124, 52 121, 52 114 Z" fill="url(#fus)" stroke="#E2E8F0" stroke-width="1.1"/>'
         f'<path d="M 74 97 L 95 95 L 98 103 L 72 103 Z" fill="#0F172A" stroke="{accent}" stroke-width="1"/>'
-        # Windows / Cargo Door
-        f'{cabin_windows}'
-        # Swept Wing + Winglet
-        f'<path d="M 218 113 L 315 142 L 326 138 L 266 112 Z" fill="url(#wingGrad)" stroke="{accent}" stroke-width="1.1"/>'
+        f'{windows}'
+        f'<path d="M 218 113 L 315 142 L 326 138 L 266 112 Z" fill="url(#wng)" stroke="{accent}" stroke-width="1.1"/>'
         f'<path d="M 315 142 L 328 128 L 333 130 L 324 143 Z" fill="{accent}"/>'
-        # High-Bypass Turbofan Engine Nacelle
         f'<rect x="208" y="121" width="44" height="20" rx="8" fill="#1E293B" stroke="{accent}" stroke-width="1.4"/>'
-        f'<ellipse cx="211" cy="131" rx="4" ry="9" fill="#0B0D12" stroke="#E2E8F0" stroke-width="1"/>'
-        # Sensor telemetry pins
-        f'<circle cx="84" cy="100" r="3.5" fill="{accent}"/>'
-        f'<circle cx="230" cy="131" r="3.5" fill="#34D399"/>'
-        f'<circle cx="448" cy="46" r="3.5" fill="#FBBF24"/>'
-        # Crisp Labels (Inter font)
-        f'<text x="20" y="24" fill="{accent}" font-family="Inter, sans-serif" font-size="11" font-weight="700">{html.escape(ac_code)} · {nose_label}</text>'
-        f'<text x="20" y="196" fill="#94A3B8" font-family="Inter, sans-serif" font-size="10.5" font-weight="600">AVIONICS &amp; RADOME</text>'
-        f'<text x="210" y="196" fill="#34D399" font-family="Inter, sans-serif" font-size="10.5" font-weight="600">PROPULSION / WINGBOX</text>'
-        f'<text x="395" y="196" fill="#FBBF24" font-family="Inter, sans-serif" font-size="10.5" font-weight="600">EMPENNAGE &amp; APU</text>'
+        f'<ellipse cx="211" cy="131" rx="4" ry="9" fill="#070A10" stroke="#E2E8F0" stroke-width="1"/>'
+        f'<circle cx="84" cy="100" r="3.5" fill="{accent}"/><circle cx="230" cy="131" r="3.5" fill="{C["pos"]}"/><circle cx="448" cy="46" r="3.5" fill="{C["gold"]}"/>'
+        f'<text x="20" y="24" fill="{accent}" font-family="Inter, sans-serif" font-size="11" font-weight="700">{html.escape(ac_code)} · {label}</text>'
+        f'<text x="20" y="196" fill="#8896AB" font-family="Inter, sans-serif" font-size="10" font-weight="600">AVIONICS &amp; RADOME</text>'
+        f'<text x="210" y="196" fill="{C["pos"]}" font-family="Inter, sans-serif" font-size="10" font-weight="600">PROPULSION / WINGBOX</text>'
+        f'<text x="395" y="196" fill="{C["gold"]}" font-family="Inter, sans-serif" font-size="10" font-weight="600">EMPENNAGE &amp; APU</text>'
         f'</svg>'
     )
 
@@ -735,32 +545,59 @@ def build_airframe_blueprint_svg(body_type, is_cargo, ac_code):
 def haversine_km(lat1, lon1, lat2, lon2):
     r = 6371.0
     lat1, lon1, lat2, lon2 = map(np.radians, [lat1, lon1, lat2, lon2])
-    dlat = lat2 - lat1
-    dlon = lon2 - lon1
-    a = np.sin(dlat / 2.0) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2.0) ** 2
+    a = np.sin((lat2 - lat1) / 2.0) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin((lon2 - lon1) / 2.0) ** 2
     return 2.0 * r * np.arcsin(np.sqrt(a))
 
 
-def style_dark_chart(fig, height=345):
+def style_chart(fig, height=340):
     fig.update_layout(
         height=height,
-        paper_bgcolor="#13161E",
-        plot_bgcolor="#0F1219",
-        font=dict(color="#E2E8F0", family="Inter, Plus Jakarta Sans, sans-serif", size=12),
-        title_font=dict(size=14, color="#FFFFFF", family="Inter, sans-serif"),
-        margin=dict(l=18, r=20, t=44, b=20),
-        transition={"duration": 650, "easing": "cubic-in-out"},
-        hoverlabel=dict(
-            bgcolor="#1A1E29",
-            bordercolor="#60A5FA",
-            font=dict(color="#FFFFFF", family="Inter, sans-serif", size=12),
-        ),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        colorway=CHART_COLORS,
+        font=dict(color="#C9D3E2", family="Inter, sans-serif", size=12),
+        title=dict(font=dict(size=13, color="#FFFFFF", family="Inter, sans-serif"), x=0.01, xanchor="left"),
+        margin=dict(l=14, r=16, t=46, b=14),
+        transition={"duration": 600, "easing": "cubic-in-out"},
+        hoverlabel=dict(bgcolor="#121927", bordercolor="#5B9DFF", font=dict(color="#FFFFFF", family="Inter, sans-serif", size=12)),
     )
-    fig.update_xaxes(gridcolor="rgba(255,255,255,0.055)", zeroline=False, linecolor="rgba(255,255,255,0.12)", tickfont=dict(color="#94A3B8"))
-    fig.update_yaxes(gridcolor="rgba(255,255,255,0.055)", zeroline=False, linecolor="rgba(255,255,255,0.12)", tickfont=dict(color="#94A3B8"))
+    fig.update_xaxes(gridcolor="rgba(148,163,184,0.08)", zeroline=False, linecolor="rgba(148,163,184,0.18)", tickfont=dict(color="#8896AB", size=11))
+    fig.update_yaxes(gridcolor="rgba(148,163,184,0.08)", zeroline=False, linecolor="rgba(148,163,184,0.18)", tickfont=dict(color="#8896AB", size=11))
     return fig
 
 
+def donut(df_in, names, values, title, center_label, height=330, color_map=None):
+    fig = px.pie(df_in, names=names, values=values, hole=0.68, title=title,
+                 color=names if color_map else None, color_discrete_map=color_map,
+                 color_discrete_sequence=CHART_COLORS)
+    fig.update_traces(textinfo="percent", textfont=dict(size=11, color="#fff"), marker=dict(line=dict(color="#0D121B", width=3)), sort=False)
+    fig.add_annotation(text=f"<b>{int(df_in[values].sum()):,}</b><br><span style='font-size:11px;color:#8896AB'>{center_label}</span>",
+                       x=0.5, y=0.5, showarrow=False, font=dict(size=20, color="#FFFFFF"))
+    style_chart(fig, height)
+    fig.update_layout(legend=dict(orientation="h", y=-0.06, x=0.5, xanchor="center", font=dict(size=11)))
+    return fig
+
+
+def page_header(crumb, title, sub):
+    st.markdown(
+        f'<div class="page-head"><div><div class="crumb">{html.escape(crumb)}</div>'
+        f'<div class="page-title">{html.escape(title)}</div><div class="page-sub">{html.escape(sub)}</div></div></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def section(title, sub=""):
+    st.markdown(f'<div class="sec"><div class="sec-t">{title}</div><div class="sec-s">{sub}</div></div>', unsafe_allow_html=True)
+
+
+def tile(k, v, delay=0.0, small=False):
+    size = "font-size:.82rem;" if small else ""
+    return f'<div class="tile" style="animation-delay:{delay:.2f}s;"><div class="tile-k">{html.escape(str(k))}</div><div class="tile-v" style="{size}">{html.escape(str(v))}</div></div>'
+
+
+# =============================================================================
+# DATA LOADERS
+# =============================================================================
 @st.cache_data(ttl=86400)
 def fetch_airline_map(api_key):
     try:
@@ -802,42 +639,41 @@ def fetch_live_commercial_fleet(api_key):
     except Exception:
         pass
 
-    df = pd.DataFrame(rows)
-    if df.empty:
-        return df
+    df_ = pd.DataFrame(rows)
+    if df_.empty:
+        return df_
 
-    df = df.drop_duplicates(subset=["icao24"]).reset_index(drop=True)
-    df["sector"] = [get_airspace_sector(la, lo) for la, lo in zip(df["latitude"], df["longitude"])]
-    df[["Manufacturer", "Family", "Body Type", "Generation"]] = df["aircraft_type"].apply(classify_airframe_taxonomy)
-    df["is_cargo"] = df["airline_code"].isin(CARGO_CODES) | (df["Family"] == "Dedicated Widebody / Freighter")
+    df_ = df_.drop_duplicates(subset=["icao24"]).reset_index(drop=True)
+    df_["sector"] = [get_airspace_sector(la, lo) for la, lo in zip(df_["latitude"], df_["longitude"])]
+    df_[["Manufacturer", "Family", "Body Type", "Generation"]] = df_["aircraft_type"].apply(classify_airframe_taxonomy)
+    df_["is_cargo"] = df_["airline_code"].isin(CARGO_CODES) | (df_["Family"] == "Dedicated Widebody / Freighter")
 
     conditions = [
-        df["baro_altitude"] < 2500,
-        (df["vertical_rate"] > 2.5) & (df["baro_altitude"] < 28000),
-        (df["vertical_rate"] < -2.5) & (df["baro_altitude"] < 28000),
-        df["baro_altitude"] >= 28000,
+        df_["baro_altitude"] < 2500,
+        (df_["vertical_rate"] > 2.5) & (df_["baro_altitude"] < 28000),
+        (df_["vertical_rate"] < -2.5) & (df_["baro_altitude"] < 28000),
+        df_["baro_altitude"] >= 28000,
     ]
-    choices = ["Takeoff / Approach", "Climb", "Descent", "Cruise"]
-    df["flight_phase"] = np.select(conditions, choices, default="En-Route")
-    return df
+    df_["flight_phase"] = np.select(conditions, ["Takeoff / Approach", "Climb", "Descent", "Cruise"], default="En-Route")
+    return df_
 
 
 @st.cache_data(ttl=60)
 def fetch_supabase_history():
     try:
         res = supabase.table("aerotrack_stats").select("*").order("timestamp", desc=True).limit(720).execute()
-        hist_df = pd.DataFrame(res.data)
-        if hist_df.empty:
+        hist = pd.DataFrame(res.data)
+        if hist.empty:
             return pd.DataFrame()
-        hist_df["ts"] = pd.to_datetime(hist_df["timestamp"], utc=True, errors="coerce")
-        return hist_df.dropna(subset=["ts"]).sort_values("ts").reset_index(drop=True)
+        hist["ts"] = pd.to_datetime(hist["timestamp"], utc=True, errors="coerce")
+        return hist.dropna(subset=["ts"]).sort_values("ts").reset_index(drop=True)
     except Exception:
         return pd.DataFrame()
 
 
 def _fetch_single_quote(symbol):
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range=1mo&interval=1d"
-    headers = {"User-Agent": "Mozilla/5.0 (AeroTrackTerminal/4.0)"}
+    headers = {"User-Agent": "Mozilla/5.0 (AeroTrackTerminal/5.0)"}
     try:
         r = requests.get(url, headers=headers, timeout=4)
         if r.status_code != 200:
@@ -884,7 +720,7 @@ def fetch_watchlist_quotes(tickers):
 @st.cache_data(ttl=900)
 def fetch_stock_detail_history(symbol, rng="1y"):
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range={rng}&interval=1d"
-    headers = {"User-Agent": "Mozilla/5.0 (AeroTrackTerminal/4.0)"}
+    headers = {"User-Agent": "Mozilla/5.0 (AeroTrackTerminal/5.0)"}
     try:
         r = requests.get(url, headers=headers, timeout=6)
         if r.status_code != 200:
@@ -895,15 +731,12 @@ def fetch_stock_detail_history(symbol, rng="1y"):
         meta = res[0].get("meta", {})
         ts = res[0].get("timestamp", [])
         q = res[0].get("indicators", {}).get("quote", [{}])[0]
-        sdf = pd.DataFrame({
+        sdf_ = pd.DataFrame({
             "date": pd.to_datetime(ts, unit="s", utc=True),
-            "open": q.get("open", []),
-            "high": q.get("high", []),
-            "low": q.get("low", []),
-            "close": q.get("close", []),
-            "volume": q.get("volume", []),
+            "open": q.get("open", []), "high": q.get("high", []), "low": q.get("low", []),
+            "close": q.get("close", []), "volume": q.get("volume", []),
         }).dropna(subset=["close"])
-        return sdf, meta
+        return sdf_, meta
     except Exception:
         return pd.DataFrame(), {}
 
@@ -917,7 +750,7 @@ def fetch_aviation_news():
         ("AeroTime", "https://www.aerotime.aero/feed"),
     ]
     items = []
-    headers = {"User-Agent": "Mozilla/5.0 (AeroTrackTerminal/4.0)"}
+    headers = {"User-Agent": "Mozilla/5.0 (AeroTrackTerminal/5.0)"}
     for source_name, url in feeds:
         try:
             r = requests.get(url, headers=headers, timeout=5)
@@ -946,48 +779,50 @@ def fetch_aviation_news():
     return items[:24]
 
 
-def compute_airline_growth_from_history(hist_df, live_airline_counts):
-    growth_map = {}
-    if hist_df.empty or "regional_breakdown" not in hist_df.columns:
-        return growth_map
-    now_ts = hist_df["ts"].max()
-    records = [(row["ts"], row["regional_breakdown"]["__meta_airlines"]) for _, row in hist_df.iterrows() if isinstance(row.get("regional_breakdown"), dict) and "__meta_airlines" in row["regional_breakdown"]]
+def compute_airline_growth_from_history(hist, live_counts):
+    growth = {}
+    if hist.empty or "regional_breakdown" not in hist.columns:
+        return growth
+    now_ts = hist["ts"].max()
+    records = [(row["ts"], row["regional_breakdown"]["__meta_airlines"]) for _, row in hist.iterrows()
+               if isinstance(row.get("regional_breakdown"), dict) and "__meta_airlines" in row["regional_breakdown"]]
     if not records:
-        return growth_map
-    _, first_counts = records[0]
+        return growth
+    first_counts = records[0][1]
     snap_24h = min(records, key=lambda x: abs((x[0] - (now_ts - pd.Timedelta(hours=24))).total_seconds()))[1]
     snap_30d = min(records, key=lambda x: abs((x[0] - (now_ts - pd.Timedelta(days=30))).total_seconds()))[1]
-    for code, live_cnt in live_airline_counts.items():
+    for code, live_cnt in live_counts.items():
         b24, b30, bmax = snap_24h.get(code), snap_30d.get(code), first_counts.get(code)
-        growth_map[code] = {
+        growth[code] = {
             "d24": round(((live_cnt - b24) / b24) * 100, 1) if b24 and b24 > 0 else None,
             "d30": round(((live_cnt - b30) / b30) * 100, 1) if b30 and b30 > 0 else None,
             "dmax": round(((live_cnt - bmax) / bmax) * 100, 1) if bmax and bmax > 0 else None,
         }
-    return growth_map
+    return growth
 
 
-# -----------------------------------------------------------------------------
-# SESSION STATE & NAVIGATION CALLBACKS
-# -----------------------------------------------------------------------------
+# =============================================================================
+# SESSION STATE
+# =============================================================================
+NAV_ITEMS = ["Markets & Fleet", "OEM Backlog", "Digital Twin & MRO", "News Wire"]
 if "primary_nav_radio" not in st.session_state:
-    st.session_state["primary_nav_radio"] = "Equity & Fleet Dashboard"
+    st.session_state["primary_nav_radio"] = NAV_ITEMS[0]
 if "selected_stock" not in st.session_state:
     st.session_state["selected_stock"] = None
 
 
 def open_stock(ticker_sym):
     st.session_state["selected_stock"] = ticker_sym
-    st.session_state["primary_nav_radio"] = "Equity & Fleet Dashboard"
+    st.session_state["primary_nav_radio"] = NAV_ITEMS[0]
 
 
 def close_stock():
     st.session_state["selected_stock"] = None
 
 
-# -----------------------------------------------------------------------------
+# =============================================================================
 # LOAD DATA
-# -----------------------------------------------------------------------------
+# =============================================================================
 airline_map = fetch_airline_map(client.api_key)
 raw_df = fetch_live_commercial_fleet(client.api_key)
 hist_df = fetch_supabase_history()
@@ -1002,794 +837,556 @@ live_airline_counts = raw_df[~raw_df["airline_code"].isin(["UNKN", ""])]["airlin
 growth_map = compute_airline_growth_from_history(hist_df, live_airline_counts)
 utc_now = datetime.now(timezone.utc).strftime("%d %b %Y · %H:%M UTC")
 
-# -----------------------------------------------------------------------------
-# TOP HEADER BAR + LIVE TICKER MARQUEE + TOP SECTION NAVIGATION
-# -----------------------------------------------------------------------------
-top_l, top_m, top_r = st.columns([1.3, 2.3, 1.15], gap="medium")
-
-with top_l:
+# =============================================================================
+# SIDEBAR RAIL: BRAND, NAVIGATION, WATCHLIST
+# =============================================================================
+with st.sidebar:
     st.markdown(
-        '<div class="brand-wrap">'
-        '<div class="brand-icon">'
-        '<svg width="21" height="21" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">'
-        '<path fill="#FFFFFF" d="M64 6 C67 6 69 12 69 22 L69 46 L116 74 L116 84 L69 68 L69 98 L88 112 L88 120 L64 113 L40 120 L40 112 L59 98 L59 68 L12 84 L12 74 L59 46 L59 22 C59 12 61 6 64 6 Z"/>'
-        '</svg>'
-        '</div>'
-        '<div><div class="brand-name">AeroTrack</div><div class="brand-sub">Institutional Aviation Finance &amp; Fleet Intelligence</div></div>'
-        '</div>',
+        '<div class="brand"><div class="brand-mark">'
+        '<svg width="20" height="20" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg"><path fill="#fff" d="M64 6 C67 6 69 12 69 22 L69 46 L116 74 L116 84 L69 68 L69 98 L88 112 L88 120 L64 113 L40 120 L40 112 L59 98 L59 68 L12 84 L12 74 L59 46 L59 22 C59 12 61 6 64 6 Z"/></svg>'
+        '</div><div><div class="brand-name">AeroTrack</div><div class="brand-tag">AVIATION FINANCE &amp; FLEET INTELLIGENCE</div></div></div>',
         unsafe_allow_html=True,
     )
 
-with top_m:
+    st.markdown('<div class="rail-label">Workspace</div>', unsafe_allow_html=True)
+    nav_view = st.radio("Navigation", NAV_ITEMS, label_visibility="collapsed", key="primary_nav_radio")
+
+    st.markdown('<div class="rail-label">Equity Watchlist<span class="hint">CLICK TO OPEN</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="seg-scope">', unsafe_allow_html=True)
+    wl_cat = st.radio("Watchlist Filter", ["All", "Airlines", "Lessors", "OEMs"], horizontal=True, label_visibility="collapsed", key="wl_filter_radio")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown('<div class="wl">', unsafe_allow_html=True)
+    for idx_w, item in enumerate([e for e in WATCHLIST_ENTITIES if wl_cat == "All" or e["category"] == wl_cat]):
+        tkr = item["ticker"]
+        q = quotes_map.get(tkr)
+        if q and q.get("price") is not None:
+            sym = CURRENCY_SYMBOLS.get(q["currency"], "")
+            pct = q["pct_change"]
+            arr = "▲" if pct >= 0 else "▼"
+            label_txt = f"{tkr}   {sym}{q['price']:,.2f}   {arr} {pct:+.2f}%\n{item['name']}"
+        else:
+            cnt = live_airline_counts.get(item["iata"], 0) if item["iata"] else 0
+            label_txt = f"{tkr}   {f'{cnt} airborne' if cnt else item['exchange']}\n{item['name']}"
+        st.button(label_txt, key=f"wl_btn_{tkr}_{idx_w}", on_click=open_stock, args=(tkr,), use_container_width=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+# =============================================================================
+# COMMAND BAR + TICKER
+# =============================================================================
+cb1, cb2, cb3 = st.columns([3.2, 1.25, 0.65], gap="small")
+with cb1:
     search_query = st.text_input(
-        "Terminal Search",
-        placeholder="Search airline, OEM, ticker, tail hex, or airframe (e.g. DAL, A359, BA, 6E, AER)...",
+        "Search",
+        placeholder="Search callsign, ICAO hex, airline code, aircraft type or manufacturer  —  e.g. DL, A359, 6E, Boeing",
         label_visibility="collapsed",
     )
+with cb2:
+    st.markdown(f'<div class="status-pill"><span class="status-dot"></span><span class="num">{utc_now}</span></div>', unsafe_allow_html=True)
+with cb3:
+    if st.button("Refresh", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
 
-with top_r:
-    tr1, tr2 = st.columns([1.45, 0.75], gap="small")
-    with tr1:
-        st.markdown(f'<div class="live-pill"><span class="live-dot"></span>{utc_now}</div>', unsafe_allow_html=True)
-    with tr2:
-        if st.button("Refresh", use_container_width=True):
-            st.cache_data.clear()
-            st.rerun()
-
-ticker_chips = [f'<span class="tick-item"><strong style="color:#60A5FA;">GLOBAL FLEET</strong> {len(raw_df):,} Airborne</span>']
+chips = [f'<span class="tick"><b style="color:{C["accent"]};">AIRBORNE</b><span class="px">{len(raw_df):,}</span></span>']
 for ent in WATCHLIST_ENTITIES:
     q = quotes_map.get(ent["ticker"])
     if q and q.get("price") is not None:
         p = q["pct_change"]
-        clr = "#34D399" if p >= 0 else "#FB7185"
-        arr = "▲" if p >= 0 else "▼"
-        ticker_chips.append(
-            f'<span class="tick-item"><strong>{ent["ticker"]}</strong> {q["price"]:,.2f} '
-            f'<span style="color:{clr};font-weight:700;">{p:+.2f}% {arr}</span></span>'
-        )
-ticker_html = "".join(ticker_chips)
-st.markdown(f'<div class="ticker-shell"><div class="ticker-track">{ticker_html}{ticker_html}</div></div>', unsafe_allow_html=True)
+        clr = C["pos"] if p >= 0 else C["neg"]
+        chips.append(f'<span class="tick"><b>{ent["ticker"]}</b><span class="px">{q["price"]:,.2f}</span>'
+                     f'<span style="color:{clr};font-family:var(--mono);font-weight:600;">{"▲" if p >= 0 else "▼"} {p:+.2f}%</span></span>')
+tick_html = "".join(chips)
+st.markdown(f'<div class="ticker"><div class="ticker-track">{tick_html}{tick_html}</div></div>', unsafe_allow_html=True)
 
-nav_view = st.radio(
-    "Primary Navigation",
-    ["Equity & Fleet Dashboard", "OEM Backlog Corner", "Digital Twin & MRO", "News Corner"],
-    horizontal=True,
-    label_visibility="collapsed",
-    key="primary_nav_radio",
-)
-
-st.markdown("<div style='height:0.55rem;'></div>", unsafe_allow_html=True)
-
-# -----------------------------------------------------------------------------
-# SPACIOUS 2-PANE LAYOUT: CLICKABLE WATCHLIST RAIL | WIDE WORKSPACE
-# -----------------------------------------------------------------------------
-col_watch, col_main = st.columns([0.92, 3.08], gap="large")
-
-with col_watch:
-    st.markdown(
-        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.45rem;">'
-        '<span style="font-size:0.96rem;font-weight:700;color:#FFFFFF;">Equity Watchlist</span>'
-        '<span style="font-size:0.7rem;color:#60A5FA;background:rgba(96,165,250,0.14);padding:0.15rem 0.55rem;border-radius:999px;font-weight:600;">CLICK TO OPEN</span>'
-        '</div>',
-        unsafe_allow_html=True,
-    )
-    wl_cat = st.radio("Watchlist Filter", ["All", "Airlines", "Lessors", "OEMs"], horizontal=True, label_visibility="collapsed", key="wl_filter_radio")
-    filtered_wl = [e for e in WATCHLIST_ENTITIES if wl_cat == "All" or e["category"] == wl_cat]
-
-    st.markdown('<div class="wl-wrap">', unsafe_allow_html=True)
-    for idx_w, item in enumerate(filtered_wl):
-        tkr = item["ticker"]
-        q = quotes_map.get(tkr)
-        if q and q.get("price") is not None:
-            sym = {"USD": "$", "EUR": "€", "GBP": "£", "INR": "₹"}.get(q["currency"], "")
-            pct = q["pct_change"]
-            arr = "▲" if pct >= 0 else "▼"
-            label_txt = f"{tkr}  ·  {sym}{q['price']:,.2f}   {arr} {pct:+.2f}%\n{item['name']}  ({item['exchange']})"
-        else:
-            cnt = live_airline_counts.get(item["iata"], 0) if item["iata"] else 0
-            extra = f"{cnt} active" if cnt else item["exchange"]
-            label_txt = f"{tkr}  ·  {extra}\n{item['name']}"
-
-        st.button(
-            label_txt,
-            key=f"wl_btn_{tkr}_{idx_w}",
-            on_click=open_stock,
-            args=(tkr,),
-            use_container_width=True,
-        )
-    st.markdown("</div>", unsafe_allow_html=True)
-
-# Apply Search Filter
+# apply search filter
 df = raw_df.copy()
 if search_query.strip():
-    q = search_query.strip().lower()
-    df = df[
-        df["callsign"].str.lower().str.contains(q, na=False)
-        | df["icao24"].str.lower().str.contains(q, na=False)
-        | df["airline_code"].str.lower().str.contains(q, na=False)
-        | df["aircraft_type"].str.lower().str.contains(q, na=False)
-        | df["Family"].str.lower().str.contains(q, na=False)
-        | df["Manufacturer"].str.lower().str.contains(q, na=False)
-    ]
-
+    sq = search_query.strip().lower()
+    mask = pd.Series(False, index=df.index)
+    for col in ["callsign", "icao24", "airline_code", "aircraft_type", "Family", "Manufacturer"]:
+        mask |= df[col].str.lower().str.contains(sq, na=False, regex=False)
+    df = df[mask]
 
 # =============================================================================
-# MAIN WORKSPACE
+# VIEW 1: MARKETS & FLEET
 # =============================================================================
-with col_main:
-    # =========================================================================
-    # VIEW 1: EQUITY & FLEET DASHBOARD (WITH CLICK-TO-OPEN STOCK TEAR-SHEET)
-    # =========================================================================
-    if nav_view == "Equity & Fleet Dashboard":
-        sel_tkr = st.session_state.get("selected_stock")
+if nav_view == NAV_ITEMS[0]:
+    sel_tkr = st.session_state.get("selected_stock")
 
-        # --- OPEN STOCK DETAIL TEAR-SHEET WHEN CLICKED ---
-        if sel_tkr:
-            ent = next((e for e in WATCHLIST_ENTITIES if e["ticker"] == sel_tkr), None)
-            q_live = quotes_map.get(sel_tkr, {})
-            fund = EQUITY_FUNDAMENTALS.get(sel_tkr, {})
+    # ---------- equity tear-sheet ----------
+    if sel_tkr:
+        ent = next((e for e in WATCHLIST_ENTITIES if e["ticker"] == sel_tkr), None)
+        q_live = quotes_map.get(sel_tkr, {})
+        fund = EQUITY_FUNDAMENTALS.get(sel_tkr, {})
 
-            top_back_1, top_back_2 = st.columns([3.4, 1.0])
-            with top_back_1:
-                rng_choice = st.radio("Chart Horizon", ["1mo", "3mo", "6mo", "1y"], index=3, horizontal=True, label_visibility="collapsed", key="stock_rng_radio")
-            with top_back_2:
-                st.button("← All Markets & Fleet", on_click=close_stock, use_container_width=True)
+        page_header(f"Equity · {ent['category'] if ent else 'Instrument'}", ent["name"] if ent else sel_tkr, fund.get("fleet_note", "Aviation equity instrument"))
 
-            sdf, meta = fetch_stock_detail_history(sel_tkr, rng=rng_choice)
-            curr_sym = {"USD": "$", "EUR": "€", "GBP": "£", "INR": "₹"}.get(q_live.get("currency", meta.get("currency", "USD")), "$")
-            live_px = q_live.get("price") or (round(float(sdf["close"].iloc[-1]), 2) if not sdf.empty else None)
-            pct_1d = q_live.get("pct_change", 0.0)
-            vol_today = q_live.get("volume", 0)
-            exch_name = q_live.get("exchange") or (ent["exchange"] if ent else "Global Exchange")
-            hi_52 = q_live.get("high_52") or (float(sdf["high"].max()) if not sdf.empty else None)
-            lo_52 = q_live.get("low_52") or (float(sdf["low"].min()) if not sdf.empty else None)
+        bar_l, bar_r = st.columns([3.4, 1.0])
+        with bar_l:
+            rng_choice = st.radio("Horizon", ["1mo", "3mo", "6mo", "1y"], index=3, horizontal=True, label_visibility="collapsed", key="stock_rng_radio")
+        with bar_r:
+            st.button("← Back to Markets", on_click=close_stock, use_container_width=True)
 
-            px_str = f"{curr_sym}{live_px:,.2f}" if live_px is not None else "N/A"
-            badge_cls = "pill-up" if pct_1d >= 0 else "pill-dn"
-            arr = "▲" if pct_1d >= 0 else "▼"
-            vol_str = f"{vol_today:,}" if vol_today else "N/A"
-            rng_52_str = f"{curr_sym}{lo_52:,.2f} – {curr_sym}{hi_52:,.2f}" if (hi_52 and lo_52) else "N/A"
-
-            st.markdown(
-                f'<div class="glass-card">'
-                f'<div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;gap:1rem;">'
-                f'  <div>'
-                f'    <div style="display:flex;align-items:center;gap:0.6rem;">'
-                f'      <span style="font-size:1.55rem;font-weight:800;color:#FFFFFF;">{html.escape(ent["name"] if ent else sel_tkr)}</span>'
-                f'      <span style="background:rgba(96,165,250,0.16);color:#60A5FA;padding:0.2rem 0.65rem;border-radius:999px;font-size:0.75rem;font-weight:700;">{html.escape(sel_tkr)} · {html.escape(exch_name)}</span>'
-                f'    </div>'
-                f'    <div style="font-size:0.83rem;color:#94A3B8;margin-top:0.3rem;">{html.escape(fund.get("fleet_note", "Aviation Equity Instrument"))}</div>'
-                f'  </div>'
-                f'  <div style="text-align:right;">'
-                f'    <div style="font-size:2.1rem;font-weight:800;color:#FFFFFF;line-height:1.05;">{px_str}</div>'
-                f'    <div style="margin-top:0.35rem;"><span class="{badge_cls}">{arr} {pct_1d:+.2f}% (1D)</span></div>'
-                f'  </div>'
-                f'</div>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-
-            # Financial & Trading Metrics Row (Hover Zoom Tiles)
-            m_cols = st.columns(6, gap="small")
-            fin_metrics = [
-                ("Market Cap", fund.get("mkt_cap", "N/A")),
-                ("Daily Volume", vol_str),
-                ("52W Range", rng_52_str),
-                ("Revenue (TTM)", fund.get("rev_ttm", "N/A")),
-                ("Net Income", fund.get("net_inc", "N/A")),
-                ("Op Margin / P/E", f"{fund.get('op_margin', 'N/A')} · {fund.get('pe', 'N/A')}"),
-            ]
-            for col, (mk, mv) in zip(m_cols, fin_metrics):
-                with col:
-                    st.markdown(
-                        f'<div class="stat-mini"><div class="stat-k">{mk}</div><div class="stat-v">{html.escape(str(mv))}</div></div>',
-                        unsafe_allow_html=True,
-                    )
-
-            st.markdown("<div style='height:0.65rem;'></div>", unsafe_allow_html=True)
-
-            # Interactive Price + 20D SMA + Volume Subplot
-            if not sdf.empty:
-                sdf["sma20"] = sdf["close"].rolling(20).mean()
-                line_clr = "#34D399" if sdf["close"].iloc[-1] >= sdf["close"].iloc[0] else "#FB7185"
-                fill_clr = "rgba(52, 211, 153, 0.14)" if line_clr == "#34D399" else "rgba(251, 113, 133, 0.14)"
-                vol_clrs = ["#34D399" if c >= o else "#FB7185" for o, c in zip(sdf["open"].fillna(sdf["close"]), sdf["close"])]
-
-                fig_stk = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.04, row_heights=[0.74, 0.26])
-                fig_stk.add_trace(go.Scatter(x=sdf["date"], y=sdf["close"], mode="lines", name="Close", line=dict(color=line_clr, width=2.6), fill="tozeroy", fillcolor=fill_clr), row=1, col=1)
-                fig_stk.add_trace(go.Scatter(x=sdf["date"], y=sdf["sma20"], mode="lines", name="20D SMA", line=dict(color="#60A5FA", width=1.6, dash="dot")), row=1, col=1)
-                fig_stk.add_trace(go.Bar(x=sdf["date"], y=sdf["volume"], name="Volume", marker_color=vol_clrs, opacity=0.75), row=2, col=1)
-                style_dark_chart(fig_stk, height=400)
-                fig_stk.update_layout(title=f"{sel_tkr} — Price Action, 20-Day Moving Average & Trading Volume ({rng_choice.upper()})", hovermode="x unified", legend=dict(orientation="h", y=1.06, x=1, xanchor="right"))
-                st.plotly_chart(fig_stk, use_container_width=True)
-
-            # Live Airborne Fleet Context if entity is an Airline or OEM
-            ent_iata = ent.get("iata") if ent else None
-            if ent_iata:
-                al_live = raw_df[raw_df["airline_code"] == ent_iata]
-                st.markdown(f'<div class="sec-head"><div class="sec-title">Live Airborne Fleet Telemetry — {html.escape(ent["name"])} ({len(al_live):,} active)</div><div class="sec-sub">REAL-TIME UTILIZATION</div></div>', unsafe_allow_html=True)
-                if not al_live.empty:
-                    c1, c2 = st.columns(2, gap="large")
-                    with c1:
-                        fam_ct = al_live["Family"].value_counts().reset_index()
-                        fam_ct.columns = ["Family", "Aircraft"]
-                        fig_af = px.pie(fam_ct, names="Family", values="Aircraft", hole=0.62, color_discrete_sequence=["#60A5FA", "#34D399", "#FBBF24", "#A78BFA", "#FB7185"], title="Live Active Airframe Mix")
-                        fig_af.update_traces(textinfo="label+percent", pull=[0.04] + [0]*(len(fam_ct)-1), marker=dict(line=dict(color="#0B0D12", width=2)))
-                        fig_af.add_annotation(text=f"<b>{len(al_live)}</b><br>Airborne", x=0.5, y=0.5, showarrow=False, font=dict(size=14, color="#FFFFFF"))
-                        style_dark_chart(fig_af, height=310)
-                        fig_af.update_layout(showlegend=False)
-                        st.plotly_chart(fig_af, use_container_width=True)
-                    with c2:
-                        sec_ct = al_live["sector"].value_counts().reset_index()
-                        sec_ct.columns = ["Region", "Aircraft"]
-                        fig_sc = px.bar(sec_ct, x="Aircraft", y="Region", orientation="h", text="Aircraft", color="Aircraft", color_continuous_scale=["#1E3A8A", "#60A5FA", "#34D399"], title="Regional Deployment Footprint")
-                        fig_sc.update_traces(textposition="outside")
-                        style_dark_chart(fig_sc, height=310)
-                        fig_sc.update_layout(coloraxis_showscale=False, yaxis=dict(categoryorder="total ascending", title=""))
-                        st.plotly_chart(fig_sc, use_container_width=True)
-
-        # --- DEFAULT GLOBAL EQUITY & FLEET DASHBOARD ---
-        else:
-            scope = st.radio(
-                "Market Scope",
-                ["Global", "NORTH AMERICA", "EUROPE", "EAST ASIA & APAC", "MIDDLE EAST & S. ASIA", "LATIN AMERICA", "Widebody", "Narrowbody", "Cargo"],
-                horizontal=True,
-                label_visibility="collapsed",
-                key="eq_scope_pills",
-            )
-
-            scoped_df = df.copy()
-            if scope in ["NORTH AMERICA", "EUROPE", "EAST ASIA & APAC", "MIDDLE EAST & S. ASIA", "LATIN AMERICA"]:
-                scoped_df = scoped_df[scoped_df["sector"] == scope]
-            elif scope == "Widebody":
-                scoped_df = scoped_df[scoped_df["Body Type"] == "Widebody"]
-            elif scope == "Narrowbody":
-                scoped_df = scoped_df[scoped_df["Body Type"] == "Narrowbody"]
-            elif scope == "Cargo":
-                scoped_df = scoped_df[scoped_df["is_cargo"] == True]
-
-            total_series = hist_df["total_flights"].tail(24).tolist() if not hist_df.empty else [len(raw_df)]
-            nb_series, wb_series, cg_series = [], [], []
-            if not hist_df.empty and "regional_breakdown" in hist_df.columns:
-                for rb in hist_df["regional_breakdown"].tail(24):
-                    if isinstance(rb, dict):
-                        bt = rb.get("__meta_body_types", {})
-                        if bt:
-                            nb_series.append(bt.get("Narrowbody", 0))
-                            wb_series.append(bt.get("Widebody", 0))
-                        if "__meta_cargo_count" in rb:
-                            cg_series.append(rb["__meta_cargo_count"])
-
-            def _delta(series, curr):
-                valid = [v for v in series if v and v > 0]
-                if len(valid) >= 2:
-                    avg = np.mean(valid[:-1])
-                    return ((curr - avg) / avg) * 100.0 if avg > 0 else 0.0
-                return 0.0
-
-            c_tot = len(scoped_df)
-            c_nb = int((scoped_df["Body Type"] == "Narrowbody").sum())
-            c_wb = int((scoped_df["Body Type"] == "Widebody").sum())
-            c_cg = int(scoped_df["is_cargo"].sum())
-
-            cards = [
-                ("ACTIVE COMMERCIAL FLEET", f"{c_tot:,}", _delta(total_series, len(raw_df)), total_series or [c_tot, c_tot], "c1"),
-                ("NARROWBODY UTILIZATION", f"{c_nb:,}", _delta(nb_series, int((raw_df["Body Type"] == "Narrowbody").sum())), nb_series or [c_nb, c_nb], "c2"),
-                ("WIDEBODY UTILIZATION", f"{c_wb:,}", _delta(wb_series, int((raw_df["Body Type"] == "Widebody").sum())), wb_series or [c_wb, c_wb], "c3"),
-                ("DEDICATED FREIGHTERS", f"{c_cg:,}", _delta(cg_series, int(raw_df["is_cargo"].sum())), cg_series or [c_cg, c_cg], "c4"),
-            ]
-
-            k1, k2, k3, k4 = st.columns(4, gap="medium")
-            for idx_i, (col, (kicker, big, dlt, ser, uid)) in enumerate(zip([k1, k2, k3, k4], cards)):
-                up = dlt >= 0
-                pcls = "pill-up" if up else "pill-dn"
-                sp_clr = "#34D399" if up else "#FB7185"
-                arr = "▲" if up else "▼"
-                svg = build_svg_sparkline(ser, color=sp_clr, width=215, height=38, uid=uid)
-                with col:
-                    st.markdown(
-                        f'<div class="idx-card" style="animation-delay:{idx_i*0.06:.2f}s;">'
-                        f'<div class="idx-kicker">{kicker}</div>'
-                        f'<div class="idx-big">{big}</div>'
-                        f'<div style="display:flex;align-items:center;gap:0.45rem;margin-bottom:0.45rem;">'
-                        f'<span class="{pcls}">{arr} {dlt:+.1f}%</span>'
-                        f'<span style="font-size:0.72rem;color:#94A3B8;">vs 24h avg</span>'
-                        f'</div><div>{svg}</div></div>',
-                        unsafe_allow_html=True,
-                    )
-
-            sub_tab_1, sub_tab_2, sub_tab_3 = st.tabs([
-                "Airline Fleet Growth & Financials",
-                "Global Commercial Fleet Map (3D)",
-                "Regional Capacity & HHI Benchmark",
-            ])
-
-            with sub_tab_1:
-                screener_rows = []
-                all_codes = sorted(
-                    set(list(AIRLINE_FINANCIAL_BASELINES.keys()) + list(raw_df[~raw_df["airline_code"].isin(["UNKN", ""])]["airline_code"].value_counts().head(25).index)),
-                    key=lambda c: live_airline_counts.get(c, 0),
-                    reverse=True,
-                )
-                for code in all_codes:
-                    sub = scoped_df[scoped_df["airline_code"] == code]
-                    live_cnt = len(sub)
-                    base = AIRLINE_FINANCIAL_BASELINES.get(code, {})
-                    tkr = base.get("ticker", "N/A")
-                    q = quotes_map.get(tkr, {})
-                    gr = growth_map.get(code, {})
-                    ng_pct = round(float((sub["Generation"] == "Next-Gen").mean() * 100), 1) if live_cnt > 0 else 0.0
-                    reg_fleet = base.get("registered_fleet")
-                    util_ratio = round((live_cnt / reg_fleet) * 100, 1) if (reg_fleet and reg_fleet > 0) else None
-
-                    screener_rows.append({
-                        "IATA": code,
-                        "Airline": base.get("name") or airline_map.get(code, code),
-                        "Ticker": tkr,
-                        "Stock Price": q.get("price"),
-                        "1D Equity %": q.get("pct_change"),
-                        "Live Airborne": live_cnt,
-                        "Registered Fleet": reg_fleet,
-                        "Active Lift %": util_ratio,
-                        "Growth 24h %": gr.get("d24"),
-                        "Growth 30D %": gr.get("d30"),
-                        "Growth Max %": gr.get("dmax"),
-                        "Next-Gen %": ng_pct,
-                        "Revenue ($B)": base.get("rev_bn"),
-                        "Net Profit ($B)": base.get("net_profit_bn"),
-                        "Op Margin %": base.get("op_margin"),
-                    })
-
-                scr_df = pd.DataFrame(screener_rows)
-                st.dataframe(
-                    scr_df,
-                    use_container_width=True,
-                    hide_index=True,
-                    height=385,
-                    column_config={
-                        "Stock Price": st.column_config.NumberColumn(format="%.2f"),
-                        "1D Equity %": st.column_config.NumberColumn(format="%+.2f%%"),
-                        "Active Lift %": st.column_config.ProgressColumn("Active Lift %", min_value=0, max_value=100, format="%.1f%%"),
-                        "Next-Gen %": st.column_config.ProgressColumn("Next-Gen %", min_value=0, max_value=100, format="%.1f%%"),
-                        "Growth 24h %": st.column_config.NumberColumn(format="%+.1f%%"),
-                        "Growth 30D %": st.column_config.NumberColumn(format="%+.1f%%"),
-                        "Growth Max %": st.column_config.NumberColumn(format="%+.1f%%"),
-                        "Revenue ($B)": st.column_config.NumberColumn(format="$%.1fB"),
-                        "Net Profit ($B)": st.column_config.NumberColumn(format="$%.2fB"),
-                        "Op Margin %": st.column_config.NumberColumn(format="%.1f%%"),
-                    },
-                )
-
-                ch1, ch2 = st.columns(2, gap="large")
-                with ch1:
-                    fin_df = scr_df.dropna(subset=["Net Profit ($B)"]).head(12)
-                    fig_prof = px.bar(
-                        fin_df,
-                        x="Airline",
-                        y="Net Profit ($B)",
-                        color="Op Margin %",
-                        text="Net Profit ($B)",
-                        color_continuous_scale=["#FB7185", "#FBBF24", "#34D399"],
-                        title="Carrier Net Profit ($B) & Operating Margin (%)",
-                    )
-                    fig_prof.update_traces(texttemplate="$%{text:.2f}B", textposition="outside")
-                    style_dark_chart(fig_prof, height=345)
-                    fig_prof.update_layout(xaxis_title="", xaxis_tickangle=-25)
-                    st.plotly_chart(fig_prof, use_container_width=True)
-
-                with ch2:
-                    body_ct = scoped_df["Body Type"].value_counts().reset_index()
-                    body_ct.columns = ["Segment", "Count"]
-                    fig_bd = px.pie(
-                        body_ct,
-                        names="Segment",
-                        values="Count",
-                        hole=0.64,
-                        color_discrete_sequence=["#34D399", "#60A5FA", "#FBBF24", "#A78BFA", "#64748B"],
-                        title="Global Active Fleet Composition by Body Class",
-                    )
-                    fig_bd.update_traces(
-                        textinfo="label+percent",
-                        pull=[0.04] + [0] * (len(body_ct) - 1),
-                        marker=dict(line=dict(color="#0B0D12", width=2.5)),
-                    )
-                    fig_bd.add_annotation(text=f"<b>{len(scoped_df):,}</b><br>Active Tails", x=0.5, y=0.5, showarrow=False, font=dict(size=14, color="#FFFFFF"))
-                    style_dark_chart(fig_bd, height=345)
-                    fig_bd.update_layout(showlegend=False)
-                    st.plotly_chart(fig_bd, use_container_width=True)
-
-            with sub_tab_2:
-                if scoped_df.empty:
-                    st.info("No active commercial airframes match this filter.")
-                else:
-                    def _body_rgb(row):
-                        if row["is_cargo"]:
-                            return [251, 191, 36, 235]
-                        if row["Body Type"] == "Widebody":
-                            return [96, 165, 250, 235]
-                        if row["Body Type"] == "Narrowbody":
-                            return [52, 211, 153, 225]
-                        return [148, 163, 184, 200]
-
-                    map_df = scoped_df.copy()
-                    map_df["color"] = map_df.apply(_body_rgb, axis=1)
-                    map_df["angle"] = (360.0 - map_df["heading"].fillna(0.0)) % 360.0
-                    map_df["icon_size"] = np.where(map_df["Body Type"] == "Widebody", 21, 15)
-                    map_df["icon_data"] = [{"url": AIRLINER_ICON_URL, "width": 128, "height": 128, "anchorX": 64, "anchorY": 64, "mask": True}] * len(map_df)
-                    map_df["alt_fmt"] = map_df["baro_altitude"].round(0).astype(int)
-                    map_df["spd_fmt"] = map_df["velocity"].round(0).astype(int)
-
-                    layer = pdk.Layer(
-                        "IconLayer",
-                        data=map_df,
-                        get_icon="icon_data",
-                        get_position="[longitude, latitude]",
-                        get_size="icon_size",
-                        size_scale=1,
-                        size_min_pixels=10,
-                        size_max_pixels=23,
-                        get_angle="angle",
-                        get_color="color",
-                        billboard=False,
-                        pickable=True,
-                    )
-                    st.pydeck_chart(
-                        pdk.Deck(
-                            layers=[layer],
-                            initial_view_state=pdk.ViewState(latitude=25, longitude=10, zoom=1.55, pitch=36, bearing=0),
-                            tooltip={
-                                "html": "<div style='font-family:Inter,sans-serif;padding:6px;min-width:195px;'>"
-                                        "<div style='font-weight:700;color:#FFF;font-size:13px;border-bottom:1px solid #334155;padding-bottom:3px;margin-bottom:4px;'>{callsign} ({icao24})</div>"
-                                        "<div style='color:#CBD5E1;font-size:12px;'>{aircraft_type} · {Family}</div>"
-                                        "<div style='color:#34D399;font-size:11px;font-weight:600;margin-top:3px;'>Altitude {alt_fmt} ft · Speed {spd_fmt} km/h</div>"
-                                        "</div>",
-                                "style": {"backgroundColor": "#13161E", "border": "1px solid #475569", "borderRadius": "10px"},
-                            },
-                            map_style="mapbox://styles/mapbox/dark-v11",
-                        ),
-                        use_container_width=True,
-                    )
-                    st.caption("Map Legend:  Emerald = Narrowbody  |  Blue = Widebody  |  Amber = Freighter / Cargo  |  Silver = Regional")
-
-            with sub_tab_3:
-                total_g = len(raw_df)
-                reg_rows = []
-                for sec_name, sec_df in raw_df.groupby("sector"):
-                    cnt = len(sec_df)
-                    c_counts = sec_df[~sec_df["airline_code"].isin(["UNKN", ""])]["airline_code"].value_counts()
-                    if not c_counts.empty:
-                        props = c_counts / c_counts.sum()
-                        hhi = round(float(sum(props ** 2) * 10000), 1)
-                        conc = "Highly Concentrated" if hhi > 2500 else ("Moderately Concentrated" if hhi > 1500 else "Competitive")
-                        top_c = f"{airline_map.get(c_counts.index[0], c_counts.index[0])} ({c_counts.index[0]})"
-                    else:
-                        hhi, conc, top_c = 0.0, "Charter / Unscheduled", "N/A"
-                    reg_rows.append({
-                        "Geographic Market": sec_name,
-                        "Active Fleet": cnt,
-                        "Global Share %": round((cnt / total_g) * 100, 1) if total_g else 0.0,
-                        "Next-Gen %": round(float((sec_df["Generation"] == "Next-Gen").mean() * 100), 1),
-                        "HHI Index": hhi,
-                        "Market Structure": conc,
-                        "Leading Operator": top_c,
-                        "Top Family": sec_df["Family"].mode()[0],
-                    })
-                st.dataframe(
-                    pd.DataFrame(reg_rows).sort_values("Active Fleet", ascending=False),
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "Global Share %": st.column_config.ProgressColumn(min_value=0, max_value=100, format="%.1f%%"),
-                        "Next-Gen %": st.column_config.ProgressColumn(min_value=0, max_value=100, format="%.1f%%"),
-                    },
-                )
-
-    # =========================================================================
-    # VIEW 2: OEM BACKLOG, UPCOMING DELIVERIES & PROBABLE DELIVERY SLOTS
-    # =========================================================================
-    elif nav_view == "OEM Backlog Corner":
-        oem_df = pd.DataFrame(OEM_BACKLOG_REFERENCE)
-        oem_df["Backlog_Years"] = (oem_df["Backlog"] / oem_df["Annual_Delivery_Rate"]).round(1)
-        oem_df["Backlog_Value_Bn"] = ((oem_df["Backlog"] * oem_df["Avg_List_Price_M"]) / 1000.0).round(1)
-        live_oems = raw_df[raw_df["Manufacturer"] != "Other"]["Manufacturer"].value_counts().to_dict()
-
-        o1, o2, o3, o4 = st.columns(4, gap="medium")
-        oem_cards = [
-            ("AIRBUS FIRM BACKLOG", f"{int(oem_df[oem_df['OEM']=='Airbus']['Backlog'].sum()):,}", f"{live_oems.get('Airbus', 0):,} live airborne", "#60A5FA"),
-            ("BOEING FIRM BACKLOG", f"{int(oem_df[oem_df['OEM']=='Boeing']['Backlog'].sum()):,}", f"{live_oems.get('Boeing', 0):,} live airborne", "#34D399"),
-            ("NEXT 12M DELIVERIES", f"{int(oem_df['Next_12M_Deliveries'].sum()):,}", "Projected global OEM output", "#FBBF24"),
-            ("GROSS BACKLOG VALUE", f"${oem_df['Backlog_Value_Bn'].sum():,.0f}B", "Implied catalog book value", "#F8FAFC"),
-        ]
-        for idx_o, (col, (k, v, sub, clr)) in enumerate(zip([o1, o2, o3, o4], oem_cards)):
-            with col:
-                st.markdown(
-                    f'<div class="idx-card" style="padding-bottom:1rem;animation-delay:{idx_o*0.06:.2f}s;">'
-                    f'<div class="idx-kicker">{k}</div>'
-                    f'<div class="idx-big" style="color:{clr};">{v}</div>'
-                    f'<div style="font-size:0.75rem;color:#94A3B8;">{sub}</div></div>',
-                    unsafe_allow_html=True,
-                )
-
-        st.markdown("<div style='height:0.65rem;'></div>", unsafe_allow_html=True)
-
-        oc1, oc2 = st.columns([1.35, 1.0], gap="large")
-        with oc1:
-            fig_bl = px.bar(
-                oem_df.sort_values("Backlog", ascending=True),
-                x="Backlog",
-                y="Program",
-                color="OEM",
-                orientation="h",
-                text="Backlog_Years",
-                color_discrete_map={"Airbus": "#60A5FA", "Boeing": "#34D399", "Embraer": "#FBBF24", "COMAC": "#FB7185", "ATR": "#94A3B8"},
-                title="Order Backlog & Implied Production Horizon (Years)",
-            )
-            fig_bl.update_traces(texttemplate="%{text} yrs", textposition="outside")
-            style_dark_chart(fig_bl, height=390)
-            fig_bl.update_layout(yaxis_title="", xaxis_title="Firm Unfilled Orders (Units)")
-            st.plotly_chart(fig_bl, use_container_width=True)
-
-        with oc2:
-            in_svc = pd.DataFrame([{"OEM": k, "Airframes": v} for k, v in live_oems.items() if k in ["Airbus", "Boeing", "Embraer", "ATR", "COMAC"]])
-            if not in_svc.empty:
-                fig_sh = px.pie(
-                    in_svc,
-                    names="OEM",
-                    values="Airframes",
-                    hole=0.64,
-                    color="OEM",
-                    color_discrete_map={"Airbus": "#60A5FA", "Boeing": "#34D399", "Embraer": "#FBBF24", "COMAC": "#FB7185", "ATR": "#94A3B8"},
-                    title="Live In-Service Market Share (ADS-B)",
-                )
-                fig_sh.update_traces(textinfo="label+percent", pull=[0.04] + [0]*(len(in_svc)-1), marker=dict(line=dict(color="#0B0D12", width=2.5)))
-                fig_sh.add_annotation(text=f"<b>{in_svc['Airframes'].sum():,}</b><br>Live Fleet", x=0.5, y=0.5, showarrow=False, font=dict(size=14, color="#FFFFFF"))
-                style_dark_chart(fig_sh, height=390)
-                fig_sh.update_layout(showlegend=False)
-                st.plotly_chart(fig_sh, use_container_width=True)
-
-        # Upcoming Deliveries & Probable Available Delivery Slots Section
-        st.markdown(
-            '<div class="sec-head">'
-            '<div class="sec-title">Upcoming Deliveries &amp; Probable Available Delivery Slots by Aircraft Type</div>'
-            '<div class="sec-sub">DIRECT OEM VS. LESSOR SECONDARY AVAILABILITY</div>'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-
-        slot_c1, slot_c2 = st.columns([1.25, 1.0], gap="large")
-        with slot_c1:
-            st.dataframe(
-                oem_df[["OEM", "Program", "Segment", "Monthly_Rate", "Next_12M_Deliveries", "Direct_Slot_Window", "Lessor_Slot", "Key_Slots"]],
-                use_container_width=True,
-                hide_index=True,
-                height=380,
-                column_config={
-                    "Monthly_Rate": st.column_config.NumberColumn("Rate / Mo", format="%d / mo"),
-                    "Next_12M_Deliveries": st.column_config.NumberColumn("Next 12M Deliveries", format="%d units"),
-                    "Direct_Slot_Window": "Probable Direct OEM Slot",
-                    "Lessor_Slot": "Probable Lessor Slot",
-                    "Key_Slots": "Primary Upcoming Recipients",
-                },
-            )
-
-        with slot_c2:
-            fig_slot = px.bar(
-                oem_df.sort_values("Direct_Slot_Year", ascending=True),
-                x="Direct_Slot_Year",
-                y="Program",
-                color="OEM",
-                orientation="h",
-                text="Direct_Slot_Window",
-                color_discrete_map={"Airbus": "#60A5FA", "Boeing": "#34D399", "Embraer": "#FBBF24", "COMAC": "#FB7185", "ATR": "#94A3B8"},
-                title="Probable Next Open Direct OEM Delivery Slot",
-            )
-            fig_slot.update_traces(textposition="outside")
-            style_dark_chart(fig_slot, height=380)
-            fig_slot.update_xaxes(range=[2025, 2033], title="Earliest Probable Direct Slot Year")
-            fig_slot.update_yaxes(title="")
-            st.plotly_chart(fig_slot, use_container_width=True)
-
-    # =========================================================================
-    # VIEW 3: DIGITAL TWIN & MRO (AIRFRAME RENDER TOP -> MRO HUBS AT BOTTOM)
-    # =========================================================================
-    elif nav_view == "Digital Twin & MRO":
-        sample_tails = df.sort_values("baro_altitude", ascending=False).head(100)
-        tail_opts = [f"{r['callsign']} | {r['icao24']} | {r['aircraft_type']} ({r['airline_code']})" for _, r in sample_tails.iterrows()]
-
-        if tail_opts:
-            picked = st.selectbox("Select Live Commercial Tail for Digital Twin & MRO Inspection", tail_opts)
-            hex_sel = picked.split("|")[1].strip()
-            trow = df[df["icao24"] == hex_sel].iloc[0]
-
-            specs = AIRFRAME_TECH_SPECS.get(
-                trow["Family"],
-                {"engines": "High-Bypass Turbofan", "seats": "Commercial Config", "range_km": "6,000+ km", "mtow_t": "78+ t", "cruise": "Mach 0.78", "cmv_m": "$42M – $85M", "lease_k": "$280k – $550k/mo"},
-            )
-            al_info = AIRLINE_FINANCIAL_BASELINES.get(trow["airline_code"], {})
-            est_age = al_info.get("avg_age_yrs", 4.6 if trow["Generation"] == "Next-Gen" else 13.8)
-            a_prog = int((hash(hex_sel) % 72) + 20)
-            c_prog = int(((est_age % 2.0) / 2.0) * 100)
-            d_prog = int(min(100, (est_age / 8.0) * 100))
-
-            # --- TOP HERO: AIRFRAME TECHNICAL RENDER + FULL AIRCRAFT INTELLIGENCE ---
-            hero_l, hero_r = st.columns([1.25, 1.35], gap="large")
-            with hero_l:
-                svg_render = build_airframe_blueprint_svg(trow["Body Type"], bool(trow["is_cargo"]), trow["aircraft_type"])
-                st.markdown(
-                    f'<div class="render-stage">'
-                    f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.55rem;">'
-                    f'<span style="font-size:0.74rem;font-weight:700;color:#60A5FA;letter-spacing:0.05em;">DIGITAL TWIN SCHEMATIC</span>'
-                    f'<span style="font-size:0.74rem;font-weight:700;color:#34D399;">{trow["flight_phase"].upper()}</span>'
-                    f'</div>'
-                    f'{svg_render}'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
-
-            with hero_r:
-                op_name = airline_map.get(trow["airline_code"], trow["airline_code"])
-                st.markdown(
-                    f'<div class="glass-card" style="margin-bottom:0.75rem;">'
-                    f'<div style="display:flex;justify-content:space-between;align-items:flex-start;">'
-                    f'  <div>'
-                    f'    <div style="font-size:1.38rem;font-weight:800;color:#FFFFFF;">{html.escape(str(trow["callsign"]))} · {html.escape(str(trow["aircraft_type"]))}</div>'
-                    f'    <div style="font-size:0.83rem;color:#94A3B8;margin-top:0.15rem;">{html.escape(trow["Manufacturer"])} · {html.escape(trow["Family"])} · Operated by <strong style="color:#E2E8F0;">{html.escape(op_name)}</strong></div>'
-                    f'  </div>'
-                    f'  <span class="pill-up">{trow["Generation"]}</span>'
-                    f'</div>'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
-
-                s1, s2, s3 = st.columns(3, gap="small")
-                spec_tiles = [
-                    ("ICAO Hex / Reg", trow["icao24"]),
-                    ("Altitude / Speed", f"{trow['baro_altitude']:,.0f} ft · {trow['velocity']:,.0f} km/h"),
-                    ("Est. Fleet Age", f"{est_age:.1f} Years"),
-                    ("Powerplant Options", specs["engines"]),
-                    ("Range / MTOW", f"{specs['range_km']} · {specs['mtow_t']}"),
-                    ("Est. CMV / Lease", f"{specs['cmv_m']} · {specs['lease_k']}"),
-                ]
-                for idx_s, (sk, sv) in enumerate(spec_tiles):
-                    target_c = [s1, s2, s3][idx_s % 3]
-                    with target_c:
-                        st.markdown(
-                            f'<div class="stat-mini" style="margin-bottom:0.55rem;">'
-                            f'<div class="stat-k">{sk}</div>'
-                            f'<div class="stat-v" style="font-size:0.9rem;">{html.escape(str(sv))}</div>'
-                            f'</div>',
-                            unsafe_allow_html=True,
-                        )
-
-            # MRO Check Horizon Bars
-            st.markdown("<div style='height:0.35rem;'></div>", unsafe_allow_html=True)
-            b1, b2, b3 = st.columns(3, gap="medium")
-            for col, (lbl, pct_val, clr) in zip(
-                [b1, b2, b3],
-                [
-                    ("A-Check Cycle (~600 Flight Hours)", a_prog, "#60A5FA"),
-                    ("C-Check Window (~24 Months)", c_prog, "#34D399"),
-                    ("Heavy D-Check Structural Horizon (~8 Years)", d_prog, "#FBBF24"),
-                ],
-            ):
-                with col:
-                    st.markdown(
-                        f'<div class="mro-bar-wrap">'
-                        f'<div style="display:flex;justify-content:space-between;font-size:0.8rem;font-weight:600;color:#E2E8F0;">'
-                        f'<span>{lbl}</span><span style="color:{clr};font-weight:700;">{pct_val}%</span></div>'
-                        f'<div class="mro-track"><div class="mro-fill" style="width:{pct_val}%;background:{clr};"></div></div>'
-                        f'</div>',
-                        unsafe_allow_html=True,
-                    )
-
-            # Engine Base Chart
-            gen_oem = df[df["Manufacturer"] != "Other"].groupby(["Manufacturer", "Generation"]).size().reset_index(name="Count")
-            if not gen_oem.empty:
-                st.markdown("<div style='height:0.45rem;'></div>", unsafe_allow_html=True)
-                fig_mro = px.bar(
-                    gen_oem,
-                    x="Manufacturer",
-                    y="Count",
-                    color="Generation",
-                    barmode="stack",
-                    text="Count",
-                    color_discrete_map={"Next-Gen": "#34D399", "Legacy": "#475569"},
-                    title="Global Engine & Airframe MRO Base: Next-Gen vs. Legacy Active Fleet",
-                )
-                style_dark_chart(fig_mro, height=295)
-                fig_mro.update_layout(xaxis_title="", legend=dict(orientation="h", y=1.08, x=1, xanchor="right", title=None))
-                st.plotly_chart(fig_mro, use_container_width=True)
-
-            # --- BOTTOM SECTION: NEAREST MRO HUB & GLOBAL MRO HUB LIST ---
-            hub_dists = [(h["hub"], h["name"], h["specialty"], float(haversine_km(trow["latitude"], trow["longitude"], h["lat"], h["lon"]))) for h in MRO_HUBS]
-            near_hub = min(hub_dists, key=lambda x: x[3])
-
-            st.markdown('<div class="sec-head"><div class="sec-title">Nearest MRO Base &amp; Global Maintenance Hub Monitor</div><div class="sec-sub">DIVERSION &amp; SCHEDULED SHOP-VISIT PROXIMITY</div></div>', unsafe_allow_html=True)
-
-            st.markdown(
-                f'<div class="glass-card" style="padding:1rem 1.25rem;">'
-                f'<div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:0.8rem;">'
-                f'  <div>'
-                f'    <div style="font-size:0.72rem;font-weight:700;color:#FBBF24;text-transform:uppercase;letter-spacing:0.05em;">Nearest MRO Facility to {html.escape(str(trow["callsign"]))}</div>'
-                f'    <div style="font-size:1.15rem;font-weight:800;color:#FFFFFF;margin-top:0.15rem;">{near_hub[0]} — {html.escape(near_hub[1])}</div>'
-                f'    <div style="font-size:0.82rem;color:#94A3B8;margin-top:0.15rem;">Capability: {html.escape(near_hub[2])}</div>'
-                f'  </div>'
-                f'  <div style="text-align:right;">'
-                f'    <div style="font-size:1.45rem;font-weight:800;color:#FBBF24;">{near_hub[3]:,.0f} km</div>'
-                f'    <div style="font-size:0.75rem;color:#94A3B8;">Great-circle distance</div>'
-                f'  </div>'
-                f'</div>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-
-            mro_rows = []
-            for hub in MRO_HUBS:
-                dists = haversine_km(df["latitude"].values, df["longitude"].values, hub["lat"], hub["lon"])
-                nearby = df[(dists <= 120.0) & (df["baro_altitude"] < 14000)]
-                mro_rows.append({
-                    "Hub": hub["hub"],
-                    "MRO Facility": hub["name"],
-                    "Specialty": hub["specialty"],
-                    "Low-Alt Movements (<120km)": int(len(nearby)),
-                    "Next-Gen Share": f"{(nearby['Generation']=='Next-Gen').mean()*100:.0f}%" if len(nearby) > 0 else "0%",
-                })
-            st.dataframe(pd.DataFrame(mro_rows).sort_values("Low-Alt Movements (<120km)", ascending=False), use_container_width=True, hide_index=True, height=300)
-
-    # =========================================================================
-    # VIEW 4: DEDICATED NEWS CORNER
-    # =========================================================================
-    else:
-        busiest_reg = raw_df["sector"].mode()[0] if not raw_df.empty else "NORTH AMERICA"
-        top_al = raw_df[~raw_df["airline_code"].isin(["UNKN", ""])]["airline_code"].mode()[0]
-        top_al_name = airline_map.get(top_al, top_al)
+        sdf, meta = fetch_stock_detail_history(sel_tkr, rng=rng_choice)
+        curr_sym = CURRENCY_SYMBOLS.get(q_live.get("currency", meta.get("currency", "USD")), "$")
+        live_px = q_live.get("price") or (round(float(sdf["close"].iloc[-1]), 2) if not sdf.empty else None)
+        pct_1d = q_live.get("pct_change", 0.0)
+        vol_today = q_live.get("volume", 0)
+        exch_name = q_live.get("exchange") or (ent["exchange"] if ent else "Global Exchange")
+        hi_52 = q_live.get("high_52") or (float(sdf["high"].max()) if not sdf.empty else None)
+        lo_52 = q_live.get("low_52") or (float(sdf["low"].min()) if not sdf.empty else None)
+        px_str = f"{curr_sym}{live_px:,.2f}" if live_px is not None else "N/A"
+        up = pct_1d >= 0
+        rng_str = f"{curr_sym}{lo_52:,.2f} – {curr_sym}{hi_52:,.2f}" if (hi_52 and lo_52) else "N/A"
 
         st.markdown(
-            f'<div class="glass-card">'
-            f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.45rem;">'
-            f'<span style="font-size:0.74rem;font-weight:700;color:#60A5FA;letter-spacing:0.05em;">AVIATION MARKET WIRE &amp; BRIEFING</span>'
-            f'<span style="background:rgba(96,165,250,0.14);color:#60A5FA;padding:0.18rem 0.65rem;border-radius:999px;font-size:0.72rem;font-weight:700;">{len(news_items)} LIVE STORIES</span>'
-            f'</div>'
-            f'<div style="font-size:1.12rem;font-weight:800;color:#FFFFFF;margin-bottom:0.35rem;">'
-            f'{len(raw_df):,} active commercial airframes tracked worldwide · {html.escape(top_al_name)} ({top_al}) leads airborne lift'
-            f'</div>'
-            f'<div style="font-size:0.85rem;color:#CBD5E1;line-height:1.55;">'
-            f'Highest sector density is currently concentrated in <strong>{busiest_reg}</strong>, with Next-Gen fleets accounting for '
-            f'<strong>{(raw_df["Generation"]=="Next-Gen").mean()*100:.1f}%</strong> of global capacity. Filter curated industry reporting below by vertical.'
+            f'<div class="hero"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:1rem;">'
+            f'<div><span class="badge">{html.escape(sel_tkr)} · {html.escape(exch_name)}</span>'
+            f'<div style="font-size:.78rem;color:var(--muted);margin-top:.6rem;">Last updated {utc_now}</div></div>'
+            f'<div style="text-align:right;"><div class="num" style="font-size:2.4rem;font-weight:600;color:#fff;line-height:1;">{px_str}</div>'
+            f'<div style="margin-top:.5rem;"><span class="chg {"up" if up else "dn"}">{"▲" if up else "▼"} {pct_1d:+.2f}% 1D</span></div></div>'
             f'</div></div>',
             unsafe_allow_html=True,
         )
 
-        news_cat = st.radio(
-            "News Category",
-            ["All Stories", "OEM & Backlog", "MRO & Engine", "Finance & Leasing", "Market Brief"],
-            horizontal=True,
-            label_visibility="collapsed",
-            key="news_cat_pills",
+        metrics = [
+            ("Market Cap", fund.get("mkt_cap", "N/A")), ("Volume", f"{vol_today:,}" if vol_today else "N/A"),
+            ("52W Range", rng_str), ("Revenue TTM", fund.get("rev_ttm", "N/A")),
+            ("Net Income", fund.get("net_inc", "N/A")), ("Op Margin", fund.get("op_margin", "N/A")),
+            ("P/E", fund.get("pe", "N/A")), ("EV / EBITDA", fund.get("ev_ebitda", "N/A")),
+        ]
+        mc = st.columns(8, gap="small")
+        for i, (col, (mk, mv)) in enumerate(zip(mc, metrics)):
+            with col:
+                st.markdown(tile(mk, mv, i * 0.04, small=(mk == "52W Range")), unsafe_allow_html=True)
+
+        st.markdown("<div style='height:.9rem;'></div>", unsafe_allow_html=True)
+
+        if not sdf.empty:
+            sdf = sdf.copy()
+            sdf["sma20"] = sdf["close"].rolling(20).mean()
+            line_clr = C["pos"] if sdf["close"].iloc[-1] >= sdf["close"].iloc[0] else C["neg"]
+            fill_clr = "rgba(47,191,143,0.10)" if line_clr == C["pos"] else "rgba(239,100,112,0.10)"
+            vol_clrs = [C["pos"] if c >= o else C["neg"] for o, c in zip(sdf["open"].fillna(sdf["close"]), sdf["close"])]
+            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.76, 0.24])
+            fig.add_trace(go.Scatter(x=sdf["date"], y=sdf["close"], mode="lines", name="Close", line=dict(color=line_clr, width=2.2), fill="tozeroy", fillcolor=fill_clr), row=1, col=1)
+            fig.add_trace(go.Scatter(x=sdf["date"], y=sdf["sma20"], mode="lines", name="20D SMA", line=dict(color=C["accent"], width=1.4, dash="dot")), row=1, col=1)
+            fig.add_trace(go.Bar(x=sdf["date"], y=sdf["volume"], name="Volume", marker_color=vol_clrs, opacity=0.6), row=2, col=1)
+            style_chart(fig, 430)
+            ymin = float(sdf["close"].min()) * 0.97
+            fig.update_yaxes(range=[ymin, float(sdf["close"].max()) * 1.02], row=1, col=1)
+            fig.update_layout(title=f"{sel_tkr} · Price, 20-Day SMA & Volume ({rng_choice.upper()})", hovermode="x unified",
+                              legend=dict(orientation="h", y=1.08, x=1, xanchor="right"))
+            with st.container(border=True):
+                st.plotly_chart(fig, use_container_width=True)
+
+        ent_iata = ent.get("iata") if ent else None
+        if ent_iata:
+            al_live = raw_df[raw_df["airline_code"] == ent_iata]
+            section(f"Live Fleet Telemetry · {html.escape(ent['name'])}", f"{len(al_live):,} AIRBORNE NOW")
+            if not al_live.empty:
+                c1, c2 = st.columns(2, gap="medium")
+                with c1:
+                    fam = al_live["Family"].value_counts().reset_index()
+                    fam.columns = ["Family", "Aircraft"]
+                    with st.container(border=True):
+                        st.plotly_chart(donut(fam, "Family", "Aircraft", "Active Airframe Mix", "Airborne", 330), use_container_width=True)
+                with c2:
+                    sec_ct = al_live["sector"].value_counts().reset_index()
+                    sec_ct.columns = ["Region", "Aircraft"]
+                    fig_sc = px.bar(sec_ct, x="Aircraft", y="Region", orientation="h", text="Aircraft", title="Regional Deployment Footprint")
+                    fig_sc.update_traces(textposition="outside", marker_color=C["accent"], marker_line_width=0)
+                    style_chart(fig_sc, 330)
+                    fig_sc.update_layout(yaxis=dict(categoryorder="total ascending", title=""), xaxis_title="")
+                    with st.container(border=True):
+                        st.plotly_chart(fig_sc, use_container_width=True)
+
+    # ---------- default dashboard ----------
+    else:
+        page_header("Markets & Fleet", "Global Fleet & Equity Overview", "Live ADS-B fleet utilisation alongside carrier financials and sector structure.")
+
+        scope = st.radio("Scope", ["Global"] + SECTOR_SCOPES + ["Widebody", "Narrowbody", "Cargo"],
+                         horizontal=True, label_visibility="collapsed", key="eq_scope_pills")
+
+        scoped_df = df.copy()
+        if scope in SECTOR_SCOPES:
+            scoped_df = scoped_df[scoped_df["sector"] == scope]
+        elif scope in ("Widebody", "Narrowbody"):
+            scoped_df = scoped_df[scoped_df["Body Type"] == scope]
+        elif scope == "Cargo":
+            scoped_df = scoped_df[scoped_df["is_cargo"]]
+
+        total_series = hist_df["total_flights"].tail(24).tolist() if (not hist_df.empty and "total_flights" in hist_df.columns) else [len(raw_df)]
+        nb_series, wb_series, cg_series = [], [], []
+        if not hist_df.empty and "regional_breakdown" in hist_df.columns:
+            for rb in hist_df["regional_breakdown"].tail(24):
+                if isinstance(rb, dict):
+                    bt = rb.get("__meta_body_types", {})
+                    if bt:
+                        nb_series.append(bt.get("Narrowbody", 0))
+                        wb_series.append(bt.get("Widebody", 0))
+                    if "__meta_cargo_count" in rb:
+                        cg_series.append(rb["__meta_cargo_count"])
+
+        def _delta(series, curr):
+            valid = [v for v in series if v and v > 0]
+            if len(valid) >= 2:
+                avg = np.mean(valid[:-1])
+                return ((curr - avg) / avg) * 100.0 if avg > 0 else 0.0
+            return 0.0
+
+        c_tot = len(scoped_df)
+        c_nb = int((scoped_df["Body Type"] == "Narrowbody").sum())
+        c_wb = int((scoped_df["Body Type"] == "Widebody").sum())
+        c_cg = int(scoped_df["is_cargo"].sum())
+
+        cards = [
+            ("Active Commercial Fleet", f"{c_tot:,}", _delta(total_series, len(raw_df)), total_series or [c_tot, c_tot], "k1", C["accent"]),
+            ("Narrowbody Utilisation", f"{c_nb:,}", _delta(nb_series, int((raw_df['Body Type'] == 'Narrowbody').sum())), nb_series or [c_nb, c_nb], "k2", C["pos"]),
+            ("Widebody Utilisation", f"{c_wb:,}", _delta(wb_series, int((raw_df['Body Type'] == 'Widebody').sum())), wb_series or [c_wb, c_wb], "k3", C["violet"]),
+            ("Dedicated Freighters", f"{c_cg:,}", _delta(cg_series, int(raw_df["is_cargo"].sum())), cg_series or [c_cg, c_cg], "k4", C["gold"]),
+        ]
+        for i, (col, (kk, big, dlt, ser, uid, kc)) in enumerate(zip(st.columns(4, gap="small"), cards)):
+            up = dlt >= 0
+            with col:
+                st.markdown(
+                    f'<div class="kpi" style="--kc:{kc};animation-delay:{i * 0.07:.2f}s;">'
+                    f'<div class="kpi-k">{kk}</div><div class="kpi-v">{big}</div>'
+                    f'<div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.5rem;">'
+                    f'<span class="chg {"up" if up else "dn"}">{"▲" if up else "▼"} {dlt:+.1f}%</span><span class="kpi-s">vs 24h avg</span></div>'
+                    f'{build_svg_sparkline(ser, C["pos"] if up else C["neg"], uid=uid)}</div>',
+                    unsafe_allow_html=True,
+                )
+
+        t1, t2, t3 = st.tabs(["Carrier Screener", "Fleet Map", "Regional Structure"])
+
+        with t1:
+            rows = []
+            all_codes = sorted(
+                set(list(AIRLINE_FINANCIAL_BASELINES.keys()) + list(raw_df[~raw_df["airline_code"].isin(["UNKN", ""])]["airline_code"].value_counts().head(25).index)),
+                key=lambda c: live_airline_counts.get(c, 0), reverse=True,
+            )
+            for code in all_codes:
+                sub = scoped_df[scoped_df["airline_code"] == code]
+                live_cnt = len(sub)
+                base = AIRLINE_FINANCIAL_BASELINES.get(code, {})
+                tkr = base.get("ticker", "N/A")
+                q = quotes_map.get(tkr, {})
+                gr = growth_map.get(code, {})
+                reg_fleet = base.get("registered_fleet")
+                rows.append({
+                    "IATA": code, "Airline": base.get("name") or airline_map.get(code, code), "Ticker": tkr,
+                    "Price": q.get("price"), "1D %": q.get("pct_change"),
+                    "Airborne": live_cnt, "Registered": reg_fleet,
+                    "Active Lift %": round((live_cnt / reg_fleet) * 100, 1) if reg_fleet else None,
+                    "Δ 24h %": gr.get("d24"), "Δ 30D %": gr.get("d30"), "Δ Max %": gr.get("dmax"),
+                    "Next-Gen %": round(float((sub["Generation"] == "Next-Gen").mean() * 100), 1) if live_cnt > 0 else 0.0,
+                    "Revenue ($B)": base.get("rev_bn"), "Net Profit ($B)": base.get("net_profit_bn"), "Op Margin %": base.get("op_margin"),
+                })
+            scr = pd.DataFrame(rows)
+            st.dataframe(
+                scr, use_container_width=True, hide_index=True, height=390,
+                column_config={
+                    "Price": st.column_config.NumberColumn(format="%.2f"),
+                    "1D %": st.column_config.NumberColumn(format="%+.2f%%"),
+                    "Active Lift %": st.column_config.ProgressColumn(min_value=0, max_value=100, format="%.1f%%"),
+                    "Next-Gen %": st.column_config.ProgressColumn(min_value=0, max_value=100, format="%.1f%%"),
+                    "Δ 24h %": st.column_config.NumberColumn(format="%+.1f%%"),
+                    "Δ 30D %": st.column_config.NumberColumn(format="%+.1f%%"),
+                    "Δ Max %": st.column_config.NumberColumn(format="%+.1f%%"),
+                    "Revenue ($B)": st.column_config.NumberColumn(format="$%.1fB"),
+                    "Net Profit ($B)": st.column_config.NumberColumn(format="$%.2fB"),
+                    "Op Margin %": st.column_config.NumberColumn(format="%.1f%%"),
+                },
+            )
+            st.markdown("<div style='height:.8rem;'></div>", unsafe_allow_html=True)
+            ch1, ch2 = st.columns(2, gap="medium")
+            with ch1:
+                fin = scr.dropna(subset=["Net Profit ($B)"]).head(12)
+                fig_p = px.bar(fin, x="Airline", y="Net Profit ($B)", color="Op Margin %", text="Net Profit ($B)",
+                               color_continuous_scale=[C["neg"], C["gold"], C["pos"]], title="Net Profit ($B) & Operating Margin")
+                fig_p.update_traces(texttemplate="$%{text:.2f}B", textposition="outside", marker_line_width=0)
+                style_chart(fig_p, 360)
+                fig_p.update_layout(xaxis_title="", xaxis_tickangle=-30, coloraxis_colorbar=dict(thickness=8, len=0.7, title=None))
+                with st.container(border=True):
+                    st.plotly_chart(fig_p, use_container_width=True)
+            with ch2:
+                body = scoped_df["Body Type"].value_counts().reset_index()
+                body.columns = ["Segment", "Count"]
+                with st.container(border=True):
+                    st.plotly_chart(donut(body, "Segment", "Count", "Active Fleet by Body Class", "Active Tails", 360), use_container_width=True)
+
+        with t2:
+            if scoped_df.empty:
+                st.info("No active commercial airframes match this filter.")
+            else:
+                def _rgb(row):
+                    if row["is_cargo"]:
+                        return [217, 169, 74, 235]
+                    if row["Body Type"] == "Widebody":
+                        return [91, 157, 255, 235]
+                    if row["Body Type"] == "Narrowbody":
+                        return [47, 191, 143, 225]
+                    return [148, 163, 184, 200]
+
+                m = scoped_df.copy()
+                m["color"] = m.apply(_rgb, axis=1)
+                m["alt_fmt"] = m["baro_altitude"].round(0).astype(int)
+                m["spd_fmt"] = m["velocity"].round(0).astype(int)
+                m["radius"] = np.where(m["Body Type"] == "Widebody", 52000, 36000)
+
+                layer = pdk.Layer(
+                    "ScatterplotLayer", data=m, get_position="[longitude, latitude]", get_fill_color="color",
+                    get_radius="radius", radius_min_pixels=2.5, radius_max_pixels=7, pickable=True, opacity=0.9,
+                )
+                with st.container(border=True):
+                    st.pydeck_chart(
+                        pdk.Deck(
+                            layers=[layer],
+                            initial_view_state=pdk.ViewState(latitude=25, longitude=10, zoom=1.5, pitch=0),
+                            tooltip={
+                                "html": "<div style='font-family:Inter,sans-serif;padding:4px;min-width:190px;'>"
+                                        "<div style='font-weight:700;color:#fff;font-size:13px;border-bottom:1px solid #334155;padding-bottom:3px;margin-bottom:4px;'>{callsign} · {icao24}</div>"
+                                        "<div style='color:#CBD5E1;font-size:12px;'>{aircraft_type} · {Family}</div>"
+                                        "<div style='color:#2FBF8F;font-size:11px;font-weight:600;margin-top:3px;'>{alt_fmt} ft · {spd_fmt} km/h</div></div>",
+                                "style": {"backgroundColor": "#0D121B", "border": "1px solid #334155", "borderRadius": "8px"},
+                            },
+                            map_provider="carto", map_style="dark",
+                        ),
+                        use_container_width=True, height=560,
+                    )
+                st.markdown(
+                    f'<div style="display:flex;gap:1.4rem;font-size:.74rem;color:var(--muted);margin-top:.5rem;">'
+                    f'<span><span style="color:{C["pos"]};">●</span> Narrowbody</span><span><span style="color:{C["accent"]};">●</span> Widebody</span>'
+                    f'<span><span style="color:{C["gold"]};">●</span> Freighter</span><span><span style="color:#94A3B8;">●</span> Regional / Other</span>'
+                    f'<span style="margin-left:auto;" class="num">{len(m):,} tracked</span></div>',
+                    unsafe_allow_html=True,
+                )
+
+        with t3:
+            total_g = len(raw_df)
+            reg_rows = []
+            for sec_name, sec_df in raw_df.groupby("sector"):
+                cnt = len(sec_df)
+                cc = sec_df[~sec_df["airline_code"].isin(["UNKN", ""])]["airline_code"].value_counts()
+                if not cc.empty:
+                    props = cc / cc.sum()
+                    hhi = round(float(sum(props ** 2) * 10000), 1)
+                    conc = "Highly Concentrated" if hhi > 2500 else ("Moderately Concentrated" if hhi > 1500 else "Competitive")
+                    top_c = f"{airline_map.get(cc.index[0], cc.index[0])} ({cc.index[0]})"
+                else:
+                    hhi, conc, top_c = 0.0, "Charter / Unscheduled", "N/A"
+                reg_rows.append({
+                    "Market": sec_name, "Active Fleet": cnt,
+                    "Global Share %": round((cnt / total_g) * 100, 1) if total_g else 0.0,
+                    "Next-Gen %": round(float((sec_df["Generation"] == "Next-Gen").mean() * 100), 1),
+                    "HHI": hhi, "Structure": conc, "Leading Operator": top_c, "Top Family": sec_df["Family"].mode()[0],
+                })
+            st.dataframe(
+                pd.DataFrame(reg_rows).sort_values("Active Fleet", ascending=False),
+                use_container_width=True, hide_index=True,
+                column_config={
+                    "Global Share %": st.column_config.ProgressColumn(min_value=0, max_value=100, format="%.1f%%"),
+                    "Next-Gen %": st.column_config.ProgressColumn(min_value=0, max_value=100, format="%.1f%%"),
+                },
+            )
+
+# =============================================================================
+# VIEW 2: OEM BACKLOG
+# =============================================================================
+elif nav_view == NAV_ITEMS[1]:
+    page_header("OEM Backlog", "Order Book, Production & Delivery Slots", "Firm backlog, implied production horizon and probable open delivery slots by programme.")
+
+    oem_df = pd.DataFrame(OEM_BACKLOG_REFERENCE)
+    oem_df["Backlog_Years"] = (oem_df["Backlog"] / oem_df["Annual_Delivery_Rate"]).round(1)
+    oem_df["Backlog_Value_Bn"] = ((oem_df["Backlog"] * oem_df["Avg_List_Price_M"]) / 1000.0).round(1)
+    live_oems = raw_df[raw_df["Manufacturer"] != "Other"]["Manufacturer"].value_counts().to_dict()
+
+    kp = [
+        ("Airbus Firm Backlog", f"{int(oem_df[oem_df['OEM'] == 'Airbus']['Backlog'].sum()):,}", f"{live_oems.get('Airbus', 0):,} live airborne", C["accent"]),
+        ("Boeing Firm Backlog", f"{int(oem_df[oem_df['OEM'] == 'Boeing']['Backlog'].sum()):,}", f"{live_oems.get('Boeing', 0):,} live airborne", C["pos"]),
+        ("Next 12M Deliveries", f"{int(oem_df['Next_12M_Deliveries'].sum()):,}", "Projected global OEM output", C["gold"]),
+        ("Gross Backlog Value", f"${oem_df['Backlog_Value_Bn'].sum():,.0f}B", "Implied at list price", C["violet"]),
+    ]
+    for i, (col, (k, v, s, kc)) in enumerate(zip(st.columns(4, gap="small"), kp)):
+        with col:
+            st.markdown(f'<div class="kpi" style="--kc:{kc};animation-delay:{i * 0.07:.2f}s;"><div class="kpi-k">{k}</div><div class="kpi-v">{v}</div><div class="kpi-s">{s}</div></div>', unsafe_allow_html=True)
+
+    st.markdown("<div style='height:.9rem;'></div>", unsafe_allow_html=True)
+    oc1, oc2 = st.columns([1.4, 1.0], gap="medium")
+    with oc1:
+        fig_bl = px.bar(oem_df.sort_values("Backlog"), x="Backlog", y="Program", color="OEM", orientation="h", text="Backlog_Years",
+                        color_discrete_map=OEM_COLORS, title="Firm Backlog & Implied Production Horizon (years)")
+        fig_bl.update_traces(texttemplate="%{text} yrs", textposition="outside", marker_line_width=0)
+        style_chart(fig_bl, 400)
+        fig_bl.update_layout(yaxis_title="", xaxis_title="Unfilled firm orders", legend=dict(orientation="h", y=1.1, x=1, xanchor="right", title=None))
+        with st.container(border=True):
+            st.plotly_chart(fig_bl, use_container_width=True)
+    with oc2:
+        in_svc = pd.DataFrame([{"OEM": k, "Airframes": v} for k, v in live_oems.items() if k in OEM_COLORS])
+        if not in_svc.empty:
+            with st.container(border=True):
+                st.plotly_chart(donut(in_svc, "OEM", "Airframes", "Live In-Service Share (ADS-B)", "Live Fleet", 400, OEM_COLORS), use_container_width=True)
+
+    section("Upcoming Deliveries & Probable Delivery Slots", "DIRECT OEM VS LESSOR SECONDARY")
+    sc1, sc2 = st.columns([1.3, 1.0], gap="medium")
+    with sc1:
+        st.dataframe(
+            oem_df[["OEM", "Program", "Segment", "Monthly_Rate", "Next_12M_Deliveries", "Direct_Slot_Window", "Lessor_Slot", "Key_Slots"]],
+            use_container_width=True, hide_index=True, height=400,
+            column_config={
+                "Monthly_Rate": st.column_config.NumberColumn("Rate / Mo", format="%d / mo"),
+                "Next_12M_Deliveries": st.column_config.NumberColumn("Next 12M", format="%d units"),
+                "Direct_Slot_Window": "Direct OEM Slot", "Lessor_Slot": "Lessor Slot", "Key_Slots": "Primary Recipients",
+            },
+        )
+    with sc2:
+        fig_s = px.bar(oem_df.sort_values("Direct_Slot_Year"), x="Direct_Slot_Year", y="Program", color="OEM", orientation="h",
+                       text="Direct_Slot_Window", color_discrete_map=OEM_COLORS, title="Next Open Direct OEM Delivery Slot")
+        fig_s.update_traces(textposition="outside", marker_line_width=0)
+        style_chart(fig_s, 400)
+        fig_s.update_xaxes(range=[2025, 2034], title="Earliest probable slot (year)")
+        fig_s.update_yaxes(title="")
+        fig_s.update_layout(showlegend=False)
+        with st.container(border=True):
+            st.plotly_chart(fig_s, use_container_width=True)
+
+# =============================================================================
+# VIEW 3: DIGITAL TWIN & MRO
+# =============================================================================
+elif nav_view == NAV_ITEMS[2]:
+    page_header("Digital Twin & MRO", "Airframe Inspection & Maintenance Proximity", "Select a live tail to view its schematic, indicative economics, check horizons and nearest MRO base.")
+
+    sample_tails = df.sort_values("baro_altitude", ascending=False).head(100)
+    tail_opts = [f"{r['callsign']} | {r['icao24']} | {r['aircraft_type']} ({r['airline_code']})" for _, r in sample_tails.iterrows()]
+
+    if not tail_opts:
+        st.info("No live tails match the current search.")
+    else:
+        picked = st.selectbox("Live commercial tail", tail_opts)
+        hex_sel = picked.split("|")[1].strip()
+        trow = df[df["icao24"] == hex_sel].iloc[0]
+
+        specs = AIRFRAME_TECH_SPECS.get(trow["Family"], {"engines": "High-Bypass Turbofan", "seats": "Commercial Config", "range_km": "6,000+ km", "mtow_t": "78+ t", "cruise": "Mach 0.78", "cmv_m": "$42M – $85M", "lease_k": "$280k – $550k/mo"})
+        al_info = AIRLINE_FINANCIAL_BASELINES.get(trow["airline_code"], {})
+        est_age = al_info.get("avg_age_yrs", 4.6 if trow["Generation"] == "Next-Gen" else 13.8)
+        a_prog = int((zlib.crc32(hex_sel.encode()) % 72) + 20)  # deterministic across reruns
+        c_prog = int(((est_age % 2.0) / 2.0) * 100)
+        d_prog = int(min(100, (est_age / 8.0) * 100))
+        op_name = airline_map.get(trow["airline_code"], trow["airline_code"])
+
+        hl, hr = st.columns([1.2, 1.4], gap="medium")
+        with hl:
+            st.markdown(
+                f'<div class="stage"><div style="display:flex;justify-content:space-between;margin-bottom:.5rem;">'
+                f'<span style="font-size:.66rem;font-weight:700;color:{C["accent"]};letter-spacing:.12em;">DIGITAL TWIN SCHEMATIC</span>'
+                f'<span class="badge pos">{html.escape(trow["flight_phase"].upper())}</span></div>'
+                f'{build_airframe_blueprint_svg(trow["Body Type"], bool(trow["is_cargo"]), trow["aircraft_type"])}</div>',
+                unsafe_allow_html=True,
+            )
+        with hr:
+            st.markdown(
+                f'<div class="hero" style="padding:1.1rem 1.3rem;margin-bottom:.8rem;"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;">'
+                f'<div><div style="font-size:1.4rem;font-weight:800;color:#fff;letter-spacing:-.02em;">{html.escape(str(trow["callsign"]))} · {html.escape(str(trow["aircraft_type"]))}</div>'
+                f'<div style="font-size:.8rem;color:var(--muted);margin-top:.25rem;">{html.escape(trow["Manufacturer"])} · {html.escape(trow["Family"])} · {html.escape(op_name)}</div></div>'
+                f'<span class="badge {"pos" if trow["Generation"] == "Next-Gen" else "gold"}">{trow["Generation"]}</span></div></div>',
+                unsafe_allow_html=True,
+            )
+            tiles = [
+                ("ICAO Hex", trow["icao24"]), ("Altitude / Speed", f"{trow['baro_altitude']:,.0f} ft · {trow['velocity']:,.0f} km/h"),
+                ("Est. Fleet Age", f"{est_age:.1f} yrs"), ("Powerplant", specs["engines"]),
+                ("Range / MTOW", f"{specs['range_km']} · {specs['mtow_t']}"), ("Est. CMV / Lease", f"{specs['cmv_m']} · {specs['lease_k']}"),
+            ]
+            tcols = st.columns(3, gap="small")
+            for i, (k, v) in enumerate(tiles):
+                with tcols[i % 3]:
+                    st.markdown(tile(k, v, i * 0.04, small=True) + "<div style='height:.5rem;'></div>", unsafe_allow_html=True)
+
+        section("Maintenance Check Horizons", "INDICATIVE · MODELLED FROM FLEET AGE")
+        for i, (col, (lbl, pv, clr)) in enumerate(zip(st.columns(3, gap="small"), [
+            ("A-Check (~600 FH)", a_prog, C["accent"]), ("C-Check (~24 mo)", c_prog, C["pos"]), ("D-Check Structural (~8 yr)", d_prog, C["gold"]),
+        ])):
+            with col:
+                st.markdown(
+                    f'<div class="bar" style="animation-delay:{i * 0.07:.2f}s;"><div class="bar-row"><span>{lbl}</span><span class="num" style="color:{clr};">{pv}%</span></div>'
+                    f'<div class="bar-track"><div class="bar-fill" style="width:{pv}%;background:{clr};animation-delay:{0.2 + i * 0.1:.1f}s;"></div></div></div>',
+                    unsafe_allow_html=True,
+                )
+
+        gen_oem = df[df["Manufacturer"] != "Other"].groupby(["Manufacturer", "Generation"]).size().reset_index(name="Count")
+        if not gen_oem.empty:
+            st.markdown("<div style='height:.9rem;'></div>", unsafe_allow_html=True)
+            fig_m = px.bar(gen_oem, x="Manufacturer", y="Count", color="Generation", barmode="stack", text="Count",
+                           color_discrete_map={"Next-Gen": C["pos"], "Legacy": "#475569"}, title="MRO Demand Base · Next-Gen vs Legacy Active Fleet")
+            fig_m.update_traces(marker_line_width=0)
+            style_chart(fig_m, 300)
+            fig_m.update_layout(xaxis_title="", legend=dict(orientation="h", y=1.12, x=1, xanchor="right", title=None))
+            with st.container(border=True):
+                st.plotly_chart(fig_m, use_container_width=True)
+
+        hub_d = [(h["hub"], h["name"], h["specialty"], float(haversine_km(trow["latitude"], trow["longitude"], h["lat"], h["lon"]))) for h in MRO_HUBS]
+        nh = min(hub_d, key=lambda x: x[3])
+        section("Nearest MRO Base & Global Hub Monitor", "DIVERSION & SHOP-VISIT PROXIMITY")
+        st.markdown(
+            f'<div class="hero" style="padding:1.05rem 1.3rem;"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:1rem;">'
+            f'<div><div style="font-size:.64rem;font-weight:700;color:{C["gold"]};letter-spacing:.12em;text-transform:uppercase;">Nearest facility to {html.escape(str(trow["callsign"]))}</div>'
+            f'<div style="font-size:1.12rem;font-weight:800;color:#fff;margin-top:.2rem;">{nh[0]} — {html.escape(nh[1])}</div>'
+            f'<div style="font-size:.8rem;color:var(--muted);margin-top:.15rem;">Capability: {html.escape(nh[2])}</div></div>'
+            f'<div style="text-align:right;"><div class="num" style="font-size:1.7rem;font-weight:600;color:{C["gold"]};">{nh[3]:,.0f} km</div>'
+            f'<div style="font-size:.72rem;color:var(--muted);">great-circle distance</div></div></div></div>',
+            unsafe_allow_html=True,
         )
 
-        shown_news = [n for n in news_items if news_cat == "All Stories" or n["tag"] == news_cat]
+        mro_rows = []
+        for hub in MRO_HUBS:
+            d = haversine_km(df["latitude"].values, df["longitude"].values, hub["lat"], hub["lon"])
+            nb = df[(d <= 120.0) & (df["baro_altitude"] < 14000)]
+            mro_rows.append({
+                "Hub": hub["hub"], "MRO Facility": hub["name"], "Specialty": hub["specialty"],
+                "Low-Alt Movements (<120km)": int(len(nb)),
+                "Next-Gen Share": f"{(nb['Generation'] == 'Next-Gen').mean() * 100:.0f}%" if len(nb) > 0 else "0%",
+            })
+        st.dataframe(pd.DataFrame(mro_rows).sort_values("Low-Alt Movements (<120km)", ascending=False), use_container_width=True, hide_index=True, height=320)
 
-        if not shown_news:
-            st.info("No articles matched that vertical in the current RSS window.")
-        else:
-            nc1, nc2 = st.columns(2, gap="medium")
-            for idx_n, item in enumerate(shown_news):
-                target_col = nc1 if idx_n % 2 == 0 else nc2
-                tag_clr = (
-                    "#60A5FA" if item["tag"] == "OEM & Backlog"
-                    else ("#FBBF24" if item["tag"] == "MRO & Engine"
-                          else ("#34D399" if item["tag"] == "Finance & Leasing" else "#CBD5E1"))
+# =============================================================================
+# VIEW 4: NEWS WIRE
+# =============================================================================
+else:
+    page_header("News Wire", "Aviation Market Briefing", "Curated trade reporting across OEMs, MRO, leasing and capital markets.")
+
+    busiest = raw_df["sector"].mode()[0]
+    top_al = raw_df[~raw_df["airline_code"].isin(["UNKN", ""])]["airline_code"].mode()[0]
+    top_name = airline_map.get(top_al, top_al)
+    st.markdown(
+        f'<div class="hero"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.6rem;">'
+        f'<span style="font-size:.66rem;font-weight:700;color:{C["accent"]};letter-spacing:.12em;">MARKET SNAPSHOT</span>'
+        f'<span class="badge">{len(news_items)} STORIES</span></div>'
+        f'<div style="font-size:1.1rem;font-weight:800;color:#fff;margin-bottom:.35rem;letter-spacing:-.01em;">'
+        f'{len(raw_df):,} commercial airframes airborne · {html.escape(top_name)} ({html.escape(top_al)}) leads lift</div>'
+        f'<div style="font-size:.84rem;color:#B6C2D4;line-height:1.6;">Airspace density is highest over <b style="color:#fff;">{html.escape(busiest)}</b>; '
+        f'Next-Gen aircraft account for <b style="color:#fff;">{(raw_df["Generation"] == "Next-Gen").mean() * 100:.1f}%</b> of the live fleet.</div></div>',
+        unsafe_allow_html=True,
+    )
+
+    news_cat = st.radio("Category", ["All Stories", "OEM & Backlog", "MRO & Engine", "Finance & Leasing", "Market Brief"],
+                        horizontal=True, label_visibility="collapsed", key="news_cat_pills")
+    shown = [n for n in news_items if news_cat == "All Stories" or n["tag"] == news_cat]
+    tag_clr = {"OEM & Backlog": C["accent"], "MRO & Engine": C["gold"], "Finance & Leasing": C["pos"]}
+
+    st.markdown("<div style='height:.5rem;'></div>", unsafe_allow_html=True)
+    if not shown:
+        st.info("No articles matched that category in the current feed window.")
+    else:
+        n1, n2 = st.columns(2, gap="medium")
+        for i, item in enumerate(shown):
+            clr = tag_clr.get(item["tag"], "#94A3B8")
+            with (n1 if i % 2 == 0 else n2):
+                st.markdown(
+                    f'<div class="news" style="animation-delay:{min(i * 0.04, 0.4):.2f}s;">'
+                    f'<div class="news-meta"><span style="color:{clr};">{html.escape(item["tag"])}</span>'
+                    f'<span style="color:var(--dim);">{html.escape(item["source"])} · {html.escape(item["published"])}</span></div>'
+                    f'<a href="{html.escape(item["link"])}" target="_blank" rel="noopener">{html.escape(item["title"])}</a>'
+                    f'<div class="news-snip">{html.escape(item["snippet"])}…</div></div>',
+                    unsafe_allow_html=True,
                 )
-                with target_col:
-                    st.markdown(
-                        f'<div class="news-tile" style="animation-delay:{min(idx_n*0.04, 0.35):.2f}s;">'
-                        f'<div style="display:flex;justify-content:space-between;align-items:center;">'
-                        f'<span style="font-size:0.71rem;font-weight:700;color:{tag_clr};text-transform:uppercase;">{item["tag"]}</span>'
-                        f'<span style="font-size:0.72rem;color:#64748B;">{html.escape(item["source"])} · {html.escape(item["published"])}</span>'
-                        f'</div>'
-                        f'<a href="{html.escape(item["link"])}" target="_blank">{html.escape(item["title"])}</a>'
-                        f'<div class="news-snip">{html.escape(item["snippet"])}...</div>'
-                        f'</div>',
-                        unsafe_allow_html=True,
-                    )
