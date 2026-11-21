@@ -1408,4 +1408,361 @@ with col_center:
                 "Stock Price": q.get("price"),
                 "1D Equity %": q.get("pct_change"),
                 "Live Airborne": live_cnt,
-                "Registered Fleet": reg_fle
+                "Registered Fleet": reg_fleet,
+                "Active Lift %": util_ratio,
+                "Growth 24h %": gr.get("d24"),
+                "Growth 30D %": gr.get("d30"),
+                "Growth Max %": gr.get("dmax"),
+                "Next-Gen %": ng_pct,
+                "Revenue ($B)": base.get("rev_bn"),
+                "Net Profit ($B)": base.get("net_profit_bn"),
+                "Op Margin %": base.get("op_margin"),
+                "Avg Age (Yrs)": base.get("avg_age_yrs"),
+            })
+
+        scr_df = pd.DataFrame(screener_rows)
+        st.dataframe(
+            scr_df,
+            use_container_width=True,
+            hide_index=True,
+            height=380,
+            column_config={
+                "Stock Price": st.column_config.NumberColumn(format="%.2f"),
+                "1D Equity %": st.column_config.NumberColumn(format="%+.2f%%"),
+                "Active Lift %": st.column_config.ProgressColumn("Active Lift %", min_value=0, max_value=100, format="%.1f%%"),
+                "Next-Gen %": st.column_config.ProgressColumn("Next-Gen %", min_value=0, max_value=100, format="%.1f%%"),
+                "Growth 24h %": st.column_config.NumberColumn(format="%+.1f%%"),
+                "Growth 30D %": st.column_config.NumberColumn(format="%+.1f%%"),
+                "Growth Max %": st.column_config.NumberColumn(format="%+.1f%%"),
+                "Revenue ($B)": st.column_config.NumberColumn(format="$%.1fB"),
+                "Net Profit ($B)": st.column_config.NumberColumn(format="$%.2fB"),
+                "Op Margin %": st.column_config.NumberColumn(format="%.1f%%"),
+            },
+        )
+
+        c_a, c_b = st.columns(2, gap="medium")
+        with c_a:
+            fin_plot_df = scr_df.dropna(subset=["Net Profit ($B)", "Revenue ($B)"]).head(12)
+            fig_prof = px.bar(
+                fin_plot_df,
+                x="Airline",
+                y="Net Profit ($B)",
+                color="Op Margin %",
+                color_continuous_scale=["#F28B82", "#FDD663", "#81C995"],
+                title="Carrier Net Profit ($B) vs. Operating Margin (%)",
+            )
+            style_dark_chart(fig_prof, height=290)
+            fig_prof.update_layout(xaxis_title="", xaxis_tickangle=-25)
+            st.plotly_chart(fig_prof, use_container_width=True)
+
+        with c_b:
+            top_live = scr_df[scr_df["Live Airborne"] > 0].head(12)
+            fig_ng = px.scatter(
+                top_live,
+                x="Live Airborne",
+                y="Next-Gen %",
+                size="Live Airborne",
+                color="Op Margin %" if top_live["Op Margin %"].notna().any() else None,
+                hover_name="Airline",
+                color_continuous_scale=["#F28B82", "#8AB4F8", "#81C995"],
+                title="Live Utilization vs. Fleet Modernization (Next-Gen %)",
+            )
+            style_dark_chart(fig_ng, height=290)
+            st.plotly_chart(fig_ng, use_container_width=True)
+
+    # =========================================================================
+    # DESK 3: MANUFACTURER (OEM) CORNER (BACKLOG, SLOTS, MARKET SHARE)
+    # =========================================================================
+    elif active_desk == "Manufacturer (OEM) Corner":
+        oem_df = pd.DataFrame(OEM_BACKLOG_REFERENCE)
+        oem_df["Backlog_Years"] = (oem_df["Backlog"] / oem_df["Annual_Delivery_Rate"]).round(1)
+        oem_df["Backlog_Value_Bn"] = ((oem_df["Backlog"] * oem_df["Avg_List_Price_M"]) / 1000.0).round(1)
+
+        # Merge live airborne counts by OEM
+        live_oem_counts = raw_df[raw_df["Manufacturer"] != "Other"]["Manufacturer"].value_counts().to_dict()
+
+        o1, o2, o3, o4 = st.columns(4, gap="small")
+        airbus_bl = int(oem_df[oem_df["OEM"] == "Airbus"]["Backlog"].sum())
+        boeing_bl = int(oem_df[oem_df["OEM"] == "Boeing"]["Backlog"].sum())
+        embraer_bl = int(oem_df[oem_df["OEM"] == "Embraer"]["Backlog"].sum())
+        total_bl_val = oem_df["Backlog_Value_Bn"].sum()
+
+        for col, (lbl, big, sub_txt, clr) in zip(
+            [o1, o2, o3, o4],
+            [
+                ("AIRBUS BACKLOG", f"{airbus_bl:,}", f"{live_oem_counts.get('Airbus', 0):,} live airborne", "#8AB4F8"),
+                ("BOEING BACKLOG", f"{boeing_bl:,}", f"{live_oem_counts.get('Boeing', 0):,} live airborne", "#81C995"),
+                ("EMBRAER BACKLOG", f"{embraer_bl:,}", f"{live_oem_counts.get('Embraer', 0):,} live airborne", "#FDD663"),
+                ("GROSS OEM BOOK VALUE", f"${total_bl_val:,.0f}B", "List-price implied backlog", "#E8EAED"),
+            ],
+        ):
+            with col:
+                st.markdown(
+                    f"""
+                    <div class="idx-card" style="padding-bottom:0.85rem;">
+                        <div class="idx-name">{lbl}</div>
+                        <div class="idx-val" style="color:{clr};">{big}</div>
+                        <div style="font-size:0.72rem;color:#9AA0A6;margin-top:0.2rem;">{sub_txt}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+        st.markdown("<div style='height:0.5rem;'></div>", unsafe_allow_html=True)
+
+        oc1, oc2 = st.columns([1.35, 1.0], gap="medium")
+        with oc1:
+            fig_bl = px.bar(
+                oem_df.sort_values("Backlog", ascending=True),
+                x="Backlog",
+                y="Program",
+                color="OEM",
+                orientation="h",
+                text="Backlog_Years",
+                color_discrete_map={"Airbus": "#8AB4F8", "Boeing": "#81C995", "Embraer": "#FDD663", "COMAC": "#F28B82", "ATR": "#9AA0A6"},
+                title="Program Order Backlog & Implied Production Years (Text = Yrs of Backlog)",
+            )
+            fig_bl.update_traces(texttemplate="%{text}y", textposition="outside")
+            style_dark_chart(fig_bl, height=350)
+            fig_bl.update_layout(yaxis_title="", xaxis_title="Firm Unfilled Orders (Units)")
+            st.plotly_chart(fig_bl, use_container_width=True)
+
+        with oc2:
+            # In-Service Live Share vs Backlog Share
+            in_svc_share = pd.DataFrame([
+                {"OEM": k, "Live Airborne": v}
+                for k, v in live_oem_counts.items()
+                if k in ["Airbus", "Boeing", "Embraer", "ATR", "COMAC"]
+            ])
+            if not in_svc_share.empty:
+                fig_share = px.pie(
+                    in_svc_share,
+                    names="OEM",
+                    values="Live Airborne",
+                    hole=0.6,
+                    color="OEM",
+                    color_discrete_map={"Airbus": "#8AB4F8", "Boeing": "#81C995", "Embraer": "#FDD663", "COMAC": "#F28B82", "ATR": "#9AA0A6"},
+                    title="Live In-Service Market Share (ADS-B)",
+                )
+                fig_share.update_traces(textinfo="label+percent", marker=dict(line=dict(color="#131314", width=2)))
+                style_dark_chart(fig_share, height=350)
+                fig_share.update_layout(showlegend=False)
+                st.plotly_chart(fig_share, use_container_width=True)
+
+        st.markdown("<div style='font-size:0.86rem;font-weight:700;color:#E8EAED;margin:0.35rem 0;'>OEM Delivery Slot Pipeline & Production Run-Rate</div>", unsafe_allow_html=True)
+        st.dataframe(
+            oem_df[["OEM", "Program", "Segment", "Backlog", "Annual_Delivery_Rate", "Backlog_Years", "Backlog_Value_Bn", "Key_Slots"]],
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Backlog": st.column_config.NumberColumn("Firm Backlog", format="%d"),
+                "Annual_Delivery_Rate": st.column_config.NumberColumn("Annual Deliveries", format="%d / yr"),
+                "Backlog_Years": st.column_config.NumberColumn("Years of Backlog", format="%.1f yrs"),
+                "Backlog_Value_Bn": st.column_config.NumberColumn("Implied Value", format="$%.1fB"),
+                "Key_Slots": "Upcoming Slot Holders",
+            },
+        )
+        st.caption("Baseline reference data ready for automated incremental order/delivery updates via Phase 2 LLM Press-Release Extractor.")
+
+    # =========================================================================
+    # DESK 4: REAL-TIME DIGITAL TWIN & MRO MAINTENANCE RADAR
+    # =========================================================================
+    else:
+        st.markdown(
+            """
+            <div class="summary-box" style="padding:0.8rem 1rem;">
+                <div class="summary-headline" style="font-size:0.95rem;margin-bottom:0.2rem;">
+                    Real-Time Airframe Digital Twin & MRO Maintenance Radar
+                </div>
+                <div class="summary-body" style="font-size:0.78rem;">
+                    Inspect individual live tails, monitor flight-phase stress cycles, estimate Next-Gen engine MRO exposure
+                    (LEAP / GTF vs. legacy CFM56 / V2500), and detect aircraft approaching major global MRO & storage hubs.
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        # Tail Digital Twin Selector
+        sample_tails = df.sort_values("baro_altitude", ascending=False).head(80)
+        tail_labels = [
+            f"{r['callsign']} | {r['icao24']} | {r['aircraft_type']} ({r['airline_code']})"
+            for _, r in sample_tails.iterrows()
+        ]
+
+        if tail_labels:
+            chosen_tail_lbl = st.selectbox("Select Live Tail for Digital Twin Inspection", tail_labels)
+            chosen_hex = chosen_tail_lbl.split("|")[1].strip()
+            tail_row = df[df["icao24"] == chosen_hex].iloc[0]
+
+            # Nearest MRO hub calculation
+            hub_dists = [
+                (h["hub"], h["name"], h["specialty"], float(haversine_km(tail_row["latitude"], tail_row["longitude"], h["lat"], h["lon"])))
+                for h in MRO_HUBS
+            ]
+            nearest_hub = min(hub_dists, key=lambda x: x[3])
+
+            al_info = AIRLINE_FINANCIAL_BASELINES.get(tail_row["airline_code"], {})
+            est_fleet_age = al_info.get("avg_age_yrs", 4.5 if tail_row["Generation"] == "Next-Gen" else 14.2)
+            # Heuristic MRO cycle window estimate based on generation & fleet age
+            a_check_prog = int((hash(chosen_hex) % 75) + 18)
+            c_check_prog = int(((est_fleet_age % 2.0) / 2.0) * 100)
+            d_check_prog = int(min(100, (est_fleet_age / 8.0) * 100))
+
+            dt1, dt2, dt3 = st.columns(3, gap="medium")
+            with dt1:
+                st.markdown(
+                    f"""
+                    <div class="twin-card">
+                        <div class="rail-sub">AIRFRAME IDENTITY</div>
+                        <div style="font-size:1.1rem;font-weight:800;color:#FFFFFF;margin:0.2rem 0;">{tail_row['callsign']} · {tail_row['icao24']}</div>
+                        <div style="font-size:0.78rem;color:#CBD5E1;">
+                            Type: <strong>{tail_row['aircraft_type']}</strong> ({tail_row['Family']})<br/>
+                            OEM: <strong>{tail_row['Manufacturer']}</strong> · {tail_row['Generation']}<br/>
+                            Operator: <strong>{airline_map.get(tail_row['airline_code'], tail_row['airline_code'])}</strong>
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            with dt2:
+                st.markdown(
+                    f"""
+                    <div class="twin-card" style="border-left-color:#81C995;">
+                        <div class="rail-sub">LIVE KINEMATIC STATE</div>
+                        <div style="font-size:1.1rem;font-weight:800;color:#81C995;margin:0.2rem 0;">{tail_row['flight_phase'].upper()}</div>
+                        <div style="font-size:0.78rem;color:#CBD5E1;font-family:'IBM Plex Mono',monospace;">
+                            ALT: {tail_row['baro_altitude']:,.0f} ft<br/>
+                            SPD: {tail_row['velocity']:,.0f} km/h | HDG: {tail_row['heading']:.0f}°<br/>
+                            SECTOR: {tail_row['sector']}
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            with dt3:
+                st.markdown(
+                    f"""
+                    <div class="twin-card" style="border-left-color:#FDD663;">
+                        <div class="rail-sub">MRO CHECK & HUB PROXIMITY</div>
+                        <div style="font-size:1.0rem;font-weight:800;color:#FDD663;margin:0.2rem 0;">Nearest: {nearest_hub[0]} ({nearest_hub[3]:,.0f} km)</div>
+                        <div style="font-size:0.76rem;color:#CBD5E1;">
+                            {nearest_hub[1]}<br/>
+                            A-Check Interval: <strong>{a_check_prog}%</strong> · C-Check: <strong>{c_check_prog}%</strong><br/>
+                            Est. Operator Fleet Age: <strong>{est_fleet_age:.1f} yrs</strong>
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+            # Check Progress Bars
+            p1, p2, p3 = st.columns(3, gap="small")
+            p1.progress(a_check_prog / 100.0, text=f"A-Check Cycle (~600 FH): {a_check_prog}%")
+            p2.progress(c_check_prog / 100.0, text=f"C-Check Window (~24 mo): {c_check_prog}%")
+            p3.progress(d_check_prog / 100.0, text=f"Heavy D-Check Horizon (~8 yr): {d_check_prog}%")
+
+        # MRO Hub Inbound / Proximity Traffic
+        mro_rows = []
+        for hub in MRO_HUBS:
+            dists = haversine_km(df["latitude"].values, df["longitude"].values, hub["lat"], hub["lon"])
+            nearby = df[(dists <= 120.0) & (df["baro_altitude"] < 14000)]
+            mro_rows.append({
+                "Hub": hub["hub"],
+                "MRO Facility": hub["name"],
+                "Specialty": hub["specialty"],
+                "Low-Alt Movements (<120km)": int(len(nearby)),
+                "Next-Gen Share": f"{(nearby['Generation']=='Next-Gen').mean()*100:.0f}%" if len(nearby) > 0 else "0%",
+            })
+
+        mc1, mc2 = st.columns([1.25, 1.0], gap="medium")
+        with mc1:
+            st.markdown("<div style='font-size:0.84rem;font-weight:700;color:#E8EAED;margin:0.4rem 0;'>Global MRO & Storage Hub Activity Monitor</div>", unsafe_allow_html=True)
+            st.dataframe(pd.DataFrame(mro_rows).sort_values("Low-Alt Movements (<120km)", ascending=False), use_container_width=True, hide_index=True, height=270)
+        with mc2:
+            gen_oem = (
+                df[df["Manufacturer"] != "Other"]
+                .groupby(["Manufacturer", "Generation"])
+                .size()
+                .reset_index(name="Count")
+            )
+            if not gen_oem.empty:
+                fig_mro = px.bar(
+                    gen_oem,
+                    x="Manufacturer",
+                    y="Count",
+                    color="Generation",
+                    barmode="stack",
+                    color_discrete_map={"Next-Gen": "#81C995", "Legacy": "#4B5563"},
+                    title="MRO Engine Base: Next-Gen vs. Legacy Fleet",
+                )
+                style_dark_chart(fig_mro, height=295)
+                fig_mro.update_layout(xaxis_title="", legend=dict(orientation="h", y=1.08, x=0, title=None))
+                st.plotly_chart(fig_mro, use_container_width=True)
+
+
+# =============================================================================
+# RIGHT RAIL: "AEROTRACK RESEARCH" COPILOT (READY FOR PHASE 2 LLM)
+# =============================================================================
+with col_right:
+    st.markdown(
+        """
+        <div class="rail-panel">
+            <div class="rail-header">
+                <div class="rail-title">Research</div>
+                <div class="rail-sub" style="color:#8AB4F8;">PHASE 2 LLM READY</div>
+            </div>
+            <div style="font-size:0.95rem;font-weight:700;color:#E8EAED;margin-bottom:0.25rem;">
+                Hi Satvik, inspect aviation markets
+            </div>
+            <div style="font-size:0.75rem;color:#9AA0A6;margin-bottom:0.75rem;">
+                Instant deterministic briefings over live ADS-B, equities &amp; OEM backlogs. Natural-language LLM synthesis connects in Phase 2.
+            </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if st.button("What's moving aviation markets today?", use_container_width=True, key="q_movers"):
+        top_q = max(quotes_map.items(), key=lambda x: x[1]["pct_change"]) if quotes_map else None
+        bot_q = min(quotes_map.items(), key=lambda x: x[1]["pct_change"]) if quotes_map else None
+        lead_carrier = raw_df[~raw_df["airline_code"].isin(["UNKN", ""])]["airline_code"].mode()[0]
+        top_txt = f"{top_q[0]} ({top_q[1]['pct_change']:+.2f}%)" if top_q else "N/A"
+        bot_txt = f"{bot_q[0]} ({bot_q[1]['pct_change']:+.2f}%)" if bot_q else "N/A"
+        st.session_state["research_answer"] = (
+            f"<strong>Live Market Pulse ({market_scope})</strong><br/>"
+            f"&bull; <strong>Airborne Capacity:</strong> {len(df):,} active airframes ({(df['Generation']=='Next-Gen').mean()*100:.1f}% Next-Gen).<br/>"
+            f"&bull; <strong>Top Operator:</strong> {airline_map.get(lead_carrier, lead_carrier)} ({lead_carrier}) with {live_airline_counts.get(lead_carrier, 0)} tails.<br/>"
+            f"&bull; <strong>Equity Leaders:</strong> Top gainer <strong>{top_txt}</strong> · Lagging <strong>{bot_txt}</strong>."
+        )
+
+    if st.button("Compare Airbus vs Boeing backlog & lift", use_container_width=True, key="q_oem"):
+        ab_live = int((raw_df["Manufacturer"] == "Airbus").sum())
+        bo_live = int((raw_df["Manufacturer"] == "Boeing").sum())
+        st.session_state["research_answer"] = (
+            f"<strong>OEM Duopoly Snapshot</strong><br/>"
+            f"&bull; <strong>Airbus:</strong> {ab_live:,} airborne today · 8,645 firm backlog (~11.3 yrs at current delivery pace).<br/>"
+            f"&bull; <strong>Boeing:</strong> {bo_live:,} airborne today · 6,189 firm backlog (~17.8 yrs implied by current rate).<br/>"
+            f"&bull; <strong>Spread:</strong> Airbus currently leads live commercial airborne share by {abs(ab_live - bo_live):,} tails."
+        )
+
+    if st.button("Analyse my watchlist & MRO exposure", use_container_width=True, key="q_wl"):
+        ng_nb = raw_df[(raw_df["Body Type"] == "Narrowbody") & (raw_df["Generation"] == "Next-Gen")]
+        st.session_state["research_answer"] = (
+            f"<strong>Watchlist & MRO Exposure Brief</strong><br/>"
+            f"&bull; <strong>Tracked Equities:</strong> {len(quotes_map)} aviation tickers synced live.<br/>"
+            f"&bull; <strong>Next-Gen Narrowbody Fleet:</strong> {len(ng_nb):,} active aircraft (A320neo / 737 MAX / A220)—primary driver of LEAP &amp; PW1100G MRO shop visits.<br/>"
+            f"&bull; <strong>Cargo Lift:</strong> {int(raw_df['is_cargo'].sum()):,} active freighter movements supporting elevated widebody residual values."
+        )
+
+    if st.session_state.get("research_answer"):
+        st.markdown(f'<div class="ai-brief-card">{st.session_state["research_answer"]}</div>', unsafe_allow_html=True)
+
+    st.markdown("<div style='height:0.65rem;'></div>", unsafe_allow_html=True)
+    st.text_input(
+        "Ask anything",
+        placeholder="LLM Research Copilot (Connecting in Phase 2)...",
+        disabled=True,
+        label_visibility="collapsed",
+        key="llm_preview_input",
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
